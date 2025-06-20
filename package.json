@@ -1,0 +1,35 @@
+{
+  "name": "mcp-prd-server",
+  "version": "1.0.0",
+  "main": "build/index.js",
+  "type": "module",
+  "bin": {
+    "prd-server": "./build/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node build/index.js",
+    "dev": "tsc -w"
+  },
+  "files": [
+    "build"
+  ],
+  "keywords": [
+    "mcp",
+    "prd"
+  ],
+  "author": "",
+  "license": "ISC",
+  "description": "MCP Server for PRD content management",
+  "devDependencies": {
+    "@types/axios": "^0.14.4",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.4.0",
+    "axios": "^1.10.0",
+    "puppeteer": "^24.10.2",
+    "zod": "^3.22.4"
+  }
+}
