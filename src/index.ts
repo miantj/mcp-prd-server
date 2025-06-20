@@ -4,119 +4,245 @@ import { z } from "zod";
 import axios from "axios";
 import { URL } from "url";
 import vm from "vm";
+import puppeteer from "puppeteer";
+import { promises as fs } from "fs";
+import path from "path";
 
-// 创建MCP服务器
-const server = new McpServer({
+// 配置
+const CONFIG = {
   name: "PRD-Server",
   version: "1.0.0",
-});
+  browserOptions: {
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  },
+  viewport: { width: 1920, height: 1080 },
+  userAgent:
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+};
 
-// 1. 封装核心逻辑
-async function fetchHtmlWithContentImpl(url: string) {
-  // 处理URL格式
-  let processedUrl = url;
-  if (url.includes("#")) {
-    const baseUrl = url.split("#")[0];
-    const params = new URLSearchParams(url.split("#")[1]);
-    const pageName = params.get("p");
-    if (pageName) {
-      processedUrl = `${baseUrl}${pageName}.html`;
+// 工具函数
+const utils = {
+  // 确保截图目录存在
+  async ensureScreenshotsDir() {
+    const screenshotsDir = path.join(process.cwd(), "screenshots");
+    try {
+      await fs.access(screenshotsDir);
+    } catch {
+      await fs.mkdir(screenshotsDir, { recursive: true });
+    }
+    return screenshotsDir;
+  },
+
+  // 获取安全的文件名
+  getSafeFileName(name: string): string {
+    return name.replace(/[^a-zA-Z0-9-_]/g, "_");
+  },
+
+  // 生成文件名
+  generateFileName(baseName: string): string {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const safeName = this.getSafeFileName(baseName);
+    return `${safeName}_${timestamp}.png`;
+  },
+
+  // 处理HTML内容
+  reduceHtml(htmlStr: string): string {
+    return htmlStr
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/<script\b[^>]*>.*?<\/script>/gi, "");
+  },
+
+  // 处理URL
+  processUrl(url: string): { processedUrl: string; pageName: string } {
+    let processedUrl = url;
+    let pageName = "";
+
+    if (url.includes("#")) {
+      const baseUrl = url.split("#")[0];
+      const params = new URLSearchParams(url.split("#")[1]);
+      const pageName = params.get("p");
+      if (pageName) {
+        processedUrl = `${baseUrl}${pageName}.html`;
+      }
+    }
+    console.log(processedUrl, pageName);
+    return { processedUrl, pageName };
+  },
+
+  // 解析document.js
+  parseCreatorResult(jsContent: string) {
+    const funcMatch = jsContent.match(
+      /\(\s*function\s*\(\)\s*\{[\s\S]*?return _creator\(\);\s*\}\s*\)\s*\(\s*\)/
+    );
+    if (!funcMatch) throw new Error("未找到 function() { ... }() 结构");
+    const script = new vm.Script(funcMatch[0]);
+    return script.runInNewContext();
+  },
+};
+
+// PRD服务类
+class PrdService {
+  private browser: any = null;
+
+  constructor() {
+    utils.ensureScreenshotsDir();
+  }
+
+  // 获取浏览器实例
+  private async getBrowser() {
+    if (!this.browser) {
+      this.browser = await puppeteer.launch(CONFIG.browserOptions);
+    }
+    return this.browser;
+  }
+
+  // 关闭浏览器
+  async closeBrowser() {
+    if (this.browser) {
+      await this.browser.close();
+      this.browser = null;
     }
   }
-  try {
-    // 1. 获取 document.js
-    const jsUrl = new URL("data/document.js", processedUrl).href;
-    const jsResp = await axios.get(jsUrl, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-      },
-    });
-    const jsContent = jsResp.data;
-    const rootNodes = getCreatorResult(jsContent).sitemap.rootNodes;
 
-    // 递归抓取内容
-    async function fetchTree(nodes: any[]): Promise<any[]> {
-      return Promise.all(nodes.map(async node => {
+  // 获取页面截图
+  private async captureScreenshot(
+    page: any,
+    nodeName: string
+  ): Promise<string> {
+    await page.setViewport(CONFIG.viewport);
+
+    const fileName = utils.generateFileName(nodeName || "page");
+    const screenshotsDir = await utils.ensureScreenshotsDir();
+    const screenshotPath = path.join(screenshotsDir, fileName);
+    const tempPath = `./${fileName}`;
+
+    await page.screenshot({ path: tempPath, fullPage: true });
+    await fs.rename(tempPath, screenshotPath);
+    return screenshotPath;
+  }
+
+  // 获取document.js
+  private async fetchDocumentJs(url: string) {
+    const jsUrl = new URL("data/document.js", url).href;
+    const response = await axios.get(jsUrl, {
+      headers: { "User-Agent": CONFIG.userAgent },
+    });
+    return utils.parseCreatorResult(response.data);
+  }
+
+  // 递归获取树形结构
+  private async fetchTree(nodes: any[], baseUrl: string): Promise<any[]> {
+    const browser = await this.getBrowser();
+
+    return await Promise.all(
+      nodes.map(async (node) => {
         if (node.type === "Folder" && node.children) {
           return {
             ...node,
-            children: await fetchTree(node.children)
+            children: await this.fetchTree(node.children, baseUrl),
           };
         } else if (node.type === "Wireframe" && node.url) {
-          // 拼接页面url
-          const htmlUrl = new URL(node.url, processedUrl).href;
+          const htmlUrl = new URL(node.url, baseUrl).href;
           let htmlContent = "";
+          let screenshotPath = "";
+
           try {
             const htmlResp = await axios.get(htmlUrl, {
-              headers: {
-                "User-Agent":
-                  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-              },
+              headers: { "User-Agent": CONFIG.userAgent },
             });
-            htmlContent = htmlReduce(htmlResp.data);
-          } catch (e) {
-            htmlContent = `获取失败: ${e}`;
+            htmlContent = utils.reduceHtml(htmlResp.data);
+
+            const page = await browser.newPage();
+            await page.goto(htmlUrl, { waitUntil: "networkidle0" });
+            screenshotPath = await this.captureScreenshot(page, node.name);
+            await page.close();
+          } catch (error) {
+            htmlContent = `获取失败: ${error}`;
           }
-          return {
-            ...node,
-            content: htmlContent
-          };
+
+          return { ...node, content: htmlContent, screenshot: screenshotPath };
         } else {
           return node;
         }
-      }));
+      })
+    );
+  }
+
+  // 获取全部内容
+  async fetchAllContent(url: string) {
+    try {
+      const { processedUrl } = utils.processUrl(url);
+      const creatorResult = await this.fetchDocumentJs(processedUrl);
+      const treeWithContent = await this.fetchTree(
+        creatorResult.sitemap.rootNodes,
+        processedUrl
+      );
+      return { success: true, tree: treeWithContent };
+    } catch (error) {
+      return { success: false, error: `获取失败：${error}` };
     }
+  }
 
-    const treeWithContent = await fetchTree(rootNodes);
+  // 获取单个页面
+  async fetchSinglePage(url: string) {
+    const { processedUrl, pageName } = utils.processUrl(url);
 
-    return { success: true, tree: treeWithContent };
-  } catch (e) {
-    return { success: false, error: `获取document.js或解析失败：${e}` };
+    try {
+      const response = await axios.get(processedUrl, {
+        headers: { "User-Agent": CONFIG.userAgent },
+      });
+      const htmlStr = utils.reduceHtml(response.data);
+
+      const browser = await this.getBrowser();
+      const page = await browser.newPage();
+      await page.goto(processedUrl, { waitUntil: "networkidle0" });
+      const screenshotPath = await this.captureScreenshot(page, pageName);
+      await page.close();
+
+      return { html: htmlStr, screenshot: screenshotPath };
+    } catch (error) {
+      return {
+        html: "获取PRD内容失败：" + (error as any).message,
+        screenshot: "",
+      };
+    }
+  }
+
+  // 智能选择
+  async smartFetch(url: string, prompt: string) {
+    const keywords = ["全部", "所有", "整体"];
+    const useAll = keywords.some((k) => prompt.includes(k));
+
+    if (useAll) {
+      return await this.fetchAllContent(url);
+    } else {
+      return await this.fetchSinglePage(url);
+    }
   }
 }
 
-/**
- * 精简和处理HTML字符串
- * @param {string} htmlStr - 原始HTML字符串
- * @param {string} [url] - 可选，页面URL，用于修正img的src
- * @returns {string} 处理后的HTML字符串
- */
-function htmlReduce(htmlStr: string) {
-  // 1. 合并多余空白
-  htmlStr = htmlStr.replace(/\s+/g, " ").trim();
-  // 2. 删除<script>标签及内容
-  htmlStr = htmlStr.replace(/<script\b[^>]*>.*?<\/script>/gi, "");
+// 创建MCP服务器
+const server = new McpServer({
+  name: CONFIG.name,
+  version: CONFIG.version,
+});
 
-  return htmlStr;
-}
+// 创建PRD服务实例
+const prdService = new PrdService();
 
-// 假设 jsContent 是 document.js 的内容（字符串）
-function getCreatorResult(jsContent: string) {
-  // 提取 (function() { ... })() 结构
-  const funcMatch = jsContent.match(/\(\s*function\s*\(\)\s*\{[\s\S]*?return _creator\(\);\s*\}\s*\)\s*\(\s*\)/);
-  if (!funcMatch) throw new Error("未找到 function() { ... }() 结构");
-  const funcStr = funcMatch[0];
-  // 用 vm 执行
-  const script = new vm.Script(funcStr);
-  return script.runInNewContext();
-}
-
-// 智能选择工具：默认 fetch_prd，若 prompt 包含"全部""所有""整体"则用 fetch_html_with_content
+// 注册工具
 server.tool(
   "smart_fetch_prd",
   "智能选择获取PRD内容的方式，默认优先 fetch_prd，若 prompt 包含'全部''所有''整体'等关键词则 fetch_html_with_content",
   {
     url: z.string().describe("PRD文档URL"),
-    prompt: z.string().describe("用户需求描述或提示词")
+    prompt: z.string().describe("用户需求描述或提示词"),
   },
   async ({ url, prompt }) => {
-    // 关键词判断
-    const keywords = ["全部", "所有", "整体"];
-    const useAll = keywords.some(k => prompt.includes(k));
-    if (useAll) {
-      // 调用 fetchHtmlWithContentImpl
-      const result = await fetchHtmlWithContentImpl(url);
+    try {
+      const result = await prdService.smartFetch(url, prompt);
       return {
         content: [
           {
@@ -126,58 +252,61 @@ server.tool(
           },
         ],
       };
-    } else {
-      // 复用 fetch_prd 逻辑
-      let processedUrl = url;
-      if (url.includes("#")) {
-        const baseUrl = url.split("#")[0];
-        const params = new URLSearchParams(url.split("#")[1]);
-        const pageName = params.get("p");
-        if (pageName) {
-          processedUrl = `${baseUrl}${pageName}.html`;
-        }
-      }
-      try {
-        const response = await axios.get(processedUrl, {
-          headers: {
-            "User-Agent":
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: `处理失败: ${error}`,
+            }),
+            mimeType: "text/plain",
           },
-        });
-        const htmlStr = htmlReduce(response.data);
-        return {
-          content: [
-            {
-              type: "text",
-              text: htmlStr,
-              mimeType: "text/html",
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "获取PRD内容失败：" + (error as any).message,
-              mimeType: "text/plain",
-            },
-          ],
-        };
-      }
+        ],
+      };
     }
   }
 );
 
 // 启动服务器
-const transport = new StdioServerTransport();
-await server.connect(transport);
+async function main() {
+  try {
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
 
+    // 设置进程退出时的清理
+    process.on("SIGINT", async () => {
+      await prdService.closeBrowser();
+      process.exit(0);
+    });
+
+    process.on("SIGTERM", async () => {
+      await prdService.closeBrowser();
+      process.exit(0);
+    });
+
+    console.log("PRD MCP Server started successfully");
+  } catch (error) {
+    console.error("Failed to start PRD MCP Server:", error);
+    process.exit(1);
+  }
+}
+
+main().catch((error) => {
+  console.error("Unhandled error:", error);
+  process.exit(1);
+});
 
 // 本地调试时直接调用 node build/index.js
-// (async () => {
-//   const result = await fetchHtmlWithContentImpl(
-//     "https://prd-upload-pub.yishouapp.com/prd/BaoBan/4.61.0/#id=deh674&p=%E6%AC%A0%E8%B4%A7%E6%98%8E%E7%BB%86%E6%96%B0%E5%A2%9E%E5%AD%97%E6%AE%B5-%E5%AD%90%E5%8C%A0&g=1"
-//   );
-//   console.log(result);
-// })();
+(async () => {
+  const prdService = new PrdService();
+  try {
+    const result = await prdService.fetchSinglePage(
+      "https://prd-upload-pub.yishouapp.com/prd/ERP/cd6638/#id=9mi7xg&p=%E8%B4%A8%E6%A3%80%E6%AC%A1%E5%93%81%E7%B1%BB%E5%9E%8B&g=1"
+    );
+    console.log(result);
+  } finally {
+    await prdService.closeBrowser();
+  }
+})();

@@ -6,7 +6,7 @@ import { URL } from "url";
 import vm from "vm";
 import puppeteer from "puppeteer";
 import path from "path";
-import fs from "fs";
+import { promises as fs } from "fs";
 // 配置
 const CONFIG = {
     name: "PRD-Server",
@@ -21,10 +21,13 @@ const CONFIG = {
 // 工具函数
 const utils = {
     // 确保截图目录存在
-    ensureScreenshotsDir() {
+    async ensureScreenshotsDir() {
         const screenshotsDir = path.join(process.cwd(), "screenshots");
-        if (!fs.existsSync(screenshotsDir)) {
-            fs.mkdirSync(screenshotsDir, { recursive: true });
+        try {
+            await fs.access(screenshotsDir);
+        }
+        catch {
+            await fs.mkdir(screenshotsDir, { recursive: true });
         }
         return screenshotsDir;
     },
@@ -40,7 +43,10 @@ const utils = {
     },
     // 处理HTML内容
     reduceHtml(htmlStr) {
-        return htmlStr.replace(/\s+/g, " ").trim().replace(/<script\b[^>]*>.*?<\/script>/gi, "");
+        return htmlStr
+            .replace(/\s+/g, " ")
+            .trim()
+            .replace(/<script\b[^>]*>.*?<\/script>/gi, "");
     },
     // 处理URL
     processUrl(url) {
@@ -64,7 +70,7 @@ const utils = {
             throw new Error("未找到 function() { ... }() 结构");
         const script = new vm.Script(funcMatch[0]);
         return script.runInNewContext();
-    }
+    },
 };
 // PRD服务类
 class PrdService {
@@ -90,11 +96,11 @@ class PrdService {
     async captureScreenshot(page, nodeName) {
         await page.setViewport(CONFIG.viewport);
         const fileName = utils.generateFileName(nodeName || "page");
-        const screenshotsDir = utils.ensureScreenshotsDir();
+        const screenshotsDir = await utils.ensureScreenshotsDir();
         const screenshotPath = path.join(screenshotsDir, fileName);
         const tempPath = `./${fileName}`;
         await page.screenshot({ path: tempPath, fullPage: true });
-        fs.renameSync(tempPath, screenshotPath);
+        await fs.rename(tempPath, screenshotPath);
         return screenshotPath;
     }
     // 获取document.js
@@ -169,7 +175,7 @@ class PrdService {
         catch (error) {
             return {
                 html: "获取PRD内容失败：" + error.message,
-                screenshot: ""
+                screenshot: "",
             };
         }
     }
@@ -200,16 +206,27 @@ server.tool("smart_fetch_prd", "智能选择获取PRD内容的方式，默认优
     try {
         const result = await prdService.smartFetch(url, prompt);
         return {
-            content: [{ type: "text", text: JSON.stringify(result), mimeType: "text/plain" }],
+            content: [
+                {
+                    type: "text",
+                    text: JSON.stringify(result),
+                    mimeType: "text/plain",
+                },
+            ],
         };
     }
     catch (error) {
         return {
-            content: [{
+            content: [
+                {
                     type: "text",
-                    text: JSON.stringify({ success: false, error: `处理失败: ${error}` }),
-                    mimeType: "text/plain"
-                }],
+                    text: JSON.stringify({
+                        success: false,
+                        error: `处理失败: ${error}`,
+                    }),
+                    mimeType: "text/plain",
+                },
+            ],
         };
     }
 });
@@ -219,11 +236,11 @@ async function main() {
         const transport = new StdioServerTransport();
         await server.connect(transport);
         // 设置进程退出时的清理
-        process.on('SIGINT', async () => {
+        process.on("SIGINT", async () => {
             await prdService.closeBrowser();
             process.exit(0);
         });
-        process.on('SIGTERM', async () => {
+        process.on("SIGTERM", async () => {
             await prdService.closeBrowser();
             process.exit(0);
         });
