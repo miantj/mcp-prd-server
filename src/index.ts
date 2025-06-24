@@ -5,6 +5,21 @@ import axios from "axios";
 import { URL } from "url";
 import vm from "vm";
 import puppeteer from "puppeteer";
+import fs from "fs";
+import path from "path";
+
+// 配置项
+const config = {
+  saveScreenshot: false, // 是否保存截图
+  screenshotDir: "screenshots", // 截图保存目录
+};
+
+// 确保截图目录存在
+if (config.saveScreenshot) {
+  if (!fs.existsSync(config.screenshotDir)) {
+    fs.mkdirSync(config.screenshotDir, { recursive: true });
+  }
+}
 
 // 创建MCP服务器
 const server = new McpServer({
@@ -38,33 +53,24 @@ async function fetchPrd(url: string) {
     const browser = await puppeteer.launch({
       headless: true,
       args: [
-        '--no-sandbox',          // 禁用沙箱模式,在某些Linux环境下必需
-        '--disable-setuid-sandbox', // 禁用setuid沙箱,配合no-sandbox使用
-        '--disable-blink-features=AutomationControlled',  // 禁用自动化特征检测
-        '--ignore-certificate-errors',  // 忽略证书错误
-      ]
+        "--no-sandbox", // 禁用沙箱模式,在某些Linux环境下必需
+        "--disable-setuid-sandbox", // 禁用setuid沙箱,配合no-sandbox使用
+        "--disable-features=HttpsFirstBalancedModeAutoEnable",
+      ],
     });
 
     try {
       const page = await browser.newPage();
-      
-      // 设置更真实的浏览器环境
-      await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-      await page.setExtraHTTPHeaders({
-        'Accept-Language': 'zh-CN,zh;q=0.9',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-        'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-        'sec-ch-ua-platform': '"macOS"'
-      });
-      
+
+      await page.goto(processedUrl, { waitUntil: "networkidle0" });
       // 修改 navigator.webdriver
       await page.evaluateOnNewDocument(() => {
         delete Object.getPrototypeOf(navigator).webdriver;
       });
 
-      await page.goto(processedUrl, { 
-        waitUntil: 'networkidle0',
-        timeout: 30000 
+      await page.goto(processedUrl, {
+        waitUntil: "networkidle0",
+        timeout: 30000,
       });
       await page.setViewport({ width: 1920, height: 1080 });
 
@@ -73,6 +79,20 @@ async function fetchPrd(url: string) {
         encoding: "base64",
         fullPage: true,
       });
+
+      // 如果开启了保存截图功能，保存图片到本地
+      if (config.saveScreenshot) {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+        const urlHash = Buffer.from(url).toString("base64").substring(0, 10);
+        const filename = `screenshot-${timestamp}-${urlHash}.png`;
+        const filepath = path.join(config.screenshotDir, filename);
+
+        await fs.promises.writeFile(
+          filepath,
+          Buffer.from(screenshot, "base64")
+        );
+        console.log(`Screenshot saved to: ${filepath}`);
+      }
 
       await page.close();
 
@@ -248,9 +268,11 @@ const transport = new StdioServerTransport();
 await server.connect(transport);
 
 // 本地调试时直接调用 node build/index.js
-// (async () => {
-//   const result = await fetchPrd(
-//     "http://prd.yishou.com/newOS/cd6362/#id=75kp6z&p=h5%E6%B4%BB%E5%8A%A8%E6%A8%A1%E6%9D%BF_%E5%90%8E%E5%8F%B0%E9%85%8D%E7%BD%AE%E8%B0%83%E6%95%B4&g=1"
-//   );
-//   console.log(result);
-// })();
+if (config.saveScreenshot) {
+  (async () => {
+    const result = await fetchPrd(
+      "http://prd.yishou.com/newOS/cd6362/#id=75kp6z&p=h5%E6%B4%BB%E5%8A%A8%E6%A8%A1%E6%9D%BF_%E5%90%8E%E5%8F%B0%E9%85%8D%E7%BD%AE%E8%B0%83%E6%95%B4&g=1"
+    );
+    console.log(result);
+  })();
+}
