@@ -11,6 +11,7 @@ import path from "path";
 const config = {
     saveScreenshot: false, // 是否保存截图
     screenshotDir: "screenshots", // 截图保存目录
+    url: "https://prd-upload-pub.yishouapp.com/prd/yishou/7.58.0/#id=4c2sh7&p=%E5%AE%A1%E6%A0%B8%E5%88%97%E8%A1%A8&g=1", // 截图保存目录
 };
 // 确保截图目录存在
 if (config.saveScreenshot) {
@@ -240,7 +241,7 @@ await server.connect(transport);
 // 本地调试时直接调用 node build/index.js
 if (config.saveScreenshot) {
     (async () => {
-        const result = await fetchPrd("http://prd.yishou.com/newOS/cd6362/#id=75kp6z&p=h5%E6%B4%BB%E5%8A%A8%E6%A8%A1%E6%9D%BF_%E5%90%8E%E5%8F%B0%E9%85%8D%E7%BD%AE%E8%B0%83%E6%95%B4&g=1");
+        const result = await fetchPrd(config.url);
         console.log(result);
     })();
 }
