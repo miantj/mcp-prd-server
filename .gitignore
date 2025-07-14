@@ -3,16 +3,7 @@
 # dependencies
 /node_modules
 /screenshots
-.pnp.js
-
-# testing
-/coverage
-
-# next.js
-/.next/
-/out/
-
-# production
+/data
 /build
 
 # misc

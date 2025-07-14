@@ -29,6 +29,34 @@ if (config.saveScreenshot) {
         fs.mkdirSync(config.screenshotDir, { recursive: true });
     }
 }
+// 读取项目和版本数据前，判断文件是否存在，不存在则自动生成
+const dataDir = path.join(process.cwd(), "data");
+const projectListPath = path.join(dataDir, "project_list.json");
+const projectVersionsPath = path.join(dataDir, "project_versions.json");
+if (!fs.existsSync(projectListPath) || !fs.existsSync(projectVersionsPath)) {
+    console.log("项目或版本数据文件不存在，正在自动爬取并生成...");
+    await fetchAndSaveAllPrd();
+}
+const projectList = JSON.parse(fs.readFileSync(projectListPath, "utf-8"));
+const projectVersions = JSON.parse(fs.readFileSync(projectVersionsPath, "utf-8"));
+// 获取所有项目的ID列表
+function getAllProjectIds() {
+    return projectList.map((item) => item.id);
+}
+// 检查项目是否有效
+function isValidProject(project) {
+    return getAllProjectIds().includes(project);
+}
+// 获取指定项目的所有版本号
+function getAllVersionsOfProject(project) {
+    return projectVersions[project]
+        ? projectVersions[project].map((v) => v.version)
+        : [];
+}
+// 检查版本号是否有效
+function isValidVersion(project, version) {
+    return getAllVersionsOfProject(project).includes(version);
+}
 // 创建MCP服务器
 const server = new McpServer({
     name: "PRD-Server",
@@ -267,6 +295,11 @@ server.tool("smart_fetch_prd", "智能选择获取PRD内容的方式，默认优
 });
 // 新增：爬取 http://192.168.1.244:7777/{project}/ 下全部版本页面内容（只返回 html，不递归）
 async function fetchProjectVersions(project) {
+    if (!isValidProject(project)) {
+        return {
+            html: `没有这个项目：${project}。可用项目有：${getAllProjectIds().join("、")}`,
+        };
+    }
     const url = `http://192.168.1.244:7777/${project}/`;
     try {
         const response = await axios.get(url, {
@@ -335,13 +368,68 @@ server.tool("fetch_project_versions", "获取 http://192.168.1.244:7777/{project
         ],
     };
 });
+// 定时爬取所有项目和版本并保存为JSON
+async function fetchAndSaveAllPrd() {
+    // 1. 获取项目列表页HTML
+    const url = "http://192.168.1.244:7777/";
+    let html = "";
+    try {
+        const res = await axios.get(url, {
+            headers: {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            },
+        });
+        html = res.data;
+    }
+    catch (e) {
+        console.error("获取项目列表页失败：", e);
+        return;
+    }
+    // 2. 提取所有项目文件夹名（过滤掉 ..）
+    const matches = [...html.matchAll(/<a href="([^\/?#]+)\//g)];
+    let projectNames = matches.map((m) => m[1]).filter((name) => name !== "..");
+    // 3. 保存为 JSON 文件
+    const dataDir = path.join(process.cwd(), "data");
+    if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
+    }
+    const savePath = path.join(dataDir, "project_list.json");
+    fs.writeFileSync(savePath, JSON.stringify(projectNames, null, 2), "utf-8");
+    console.log("已保存项目列表到", savePath);
+    // 4. 递归抓取每个项目下的所有版本目录（过滤掉 ..）
+    const allVersions = {};
+    for (const project of projectNames) {
+        try {
+            const projectUrl = `http://192.168.1.244:7777/${project}/`;
+            const res = await axios.get(projectUrl, {
+                headers: {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                },
+            });
+            const projectHtml = res.data;
+            const versionMatches = [
+                ...projectHtml.matchAll(/<a href="([^\/?#]+)\//g),
+            ];
+            allVersions[project] = versionMatches
+                .map((m) => m[1])
+                .filter((v) => v !== "..");
+        }
+        catch (e) {
+            console.error(`获取项目 ${project} 版本目录失败：`, e);
+            allVersions[project] = [];
+        }
+    }
+    const versionSavePath = path.join(dataDir, "project_versions.json");
+    fs.writeFileSync(versionSavePath, JSON.stringify(allVersions, null, 2), "utf-8");
+    console.log("已保存所有项目版本到", versionSavePath);
+}
 // 启动服务器
 const transport = new StdioServerTransport();
 await server.connect(transport);
 // 本地调试时直接调用 node build/index.js
 if (config.saveScreenshot) {
     (async () => {
-        const result = await fetchProjectVersions("yishou");
+        const result = await fetchAndSaveAllPrd();
         console.log(result);
     })();
 }
