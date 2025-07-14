@@ -8,11 +8,22 @@ import puppeteer from "puppeteer";
 import fs from "fs";
 import path from "path";
 
+// 项目名称映射表
+const projectNameMap = {
+  BaoBan: "爆版",
+  ERP: "ERP系统",
+  temp: "临时",
+  test: "测试",
+  yishou: "一手",
+  yizhe: "衣者",
+};
+
 // 配置项
 const config = {
   saveScreenshot: false, // 是否保存截图
   screenshotDir: "screenshots", // 截图保存目录
-  url: "https://prd-upload-pub.yishouapp.com/prd/yishou/7.58.0/#id=4c2sh7&p=%E5%AE%A1%E6%A0%B8%E5%88%97%E8%A1%A8&g=1", // 截图保存目录
+  // url: "https://prd-upload-pub.yishouapp.com/prd/yishou/7.58.0/#id=4c2sh7&p=%E5%AE%A1%E6%A0%B8%E5%88%97%E8%A1%A8&g=1", // 截图保存目录
+  url: "http://192.168.1.244:7777/yishou/7.58.0", // 截图保存目录
 };
 
 // 确保截图目录存在
@@ -40,7 +51,7 @@ async function fetchPrd(url: string) {
       processedUrl = `${baseUrl}${pageName}.html`;
     }
   }
-
+  console.log("processedUrl", processedUrl);
   try {
     const response = await axios.get(processedUrl, {
       headers: {
@@ -49,7 +60,7 @@ async function fetchPrd(url: string) {
       },
     });
     const htmlStr = htmlReduce(response.data);
-
+    console.log("htmlStr", htmlStr);
     // 获取页面截图
     const browser = await puppeteer.launch({
       headless: true,
@@ -63,7 +74,6 @@ async function fetchPrd(url: string) {
     try {
       const page = await browser.newPage();
 
-      await page.goto(processedUrl, { waitUntil: "networkidle0" });
       // 修改 navigator.webdriver
       await page.evaluateOnNewDocument(() => {
         delete Object.getPrototypeOf(navigator).webdriver;
@@ -180,6 +190,32 @@ async function fetchHtmlWithContentImpl(url: string) {
 }
 
 /**
+ * 增强HTML内容的语义化
+ * @param {string} htmlStr - 原始HTML字符串
+ * @returns {string} 处理后的HTML字符串
+ */
+function enhanceHtmlSemantics(htmlStr: string) {
+  // 1. 为项目名称添加语义化标记
+  Object.entries(projectNameMap).forEach(([pinyin, chinese]) => {
+    // 为拼音添加中文注释
+    const pinyinRegex = new RegExp(`(${pinyin})(?![^<]*>)`, "gi");
+    htmlStr = htmlStr.replace(
+      pinyinRegex,
+      `<span class="project-name" data-chinese="${chinese}" data-pinyin="$1">$1</span>`
+    );
+
+    // 为中文添加拼音注释
+    const chineseRegex = new RegExp(`(${chinese})(?![^<]*>)`, "gi");
+    htmlStr = htmlStr.replace(
+      chineseRegex,
+      `<span class="project-name" data-chinese="$1" data-pinyin="${pinyin}">$1</span>`
+    );
+  });
+
+  return htmlStr;
+}
+
+/**
  * 精简和处理HTML字符串
  * @param {string} htmlStr - 原始HTML字符串
  * @param {string} [url] - 可选，页面URL，用于修正img的src
@@ -190,6 +226,8 @@ function htmlReduce(htmlStr: string) {
   htmlStr = htmlStr.replace(/\s+/g, " ").trim();
   // 2. 删除<script>标签及内容
   htmlStr = htmlStr.replace(/<script\b[^>]*>.*?<\/script>/gi, "");
+  // 3. 增强语义化
+  htmlStr = enhanceHtmlSemantics(htmlStr);
 
   return htmlStr;
 }
@@ -264,6 +302,92 @@ server.tool(
   }
 );
 
+// 新增：爬取 http://192.168.1.244:7777/{project}/ 下全部版本页面内容（只返回 html，不递归）
+async function fetchProjectVersions(project: string) {
+  const url = `http://192.168.1.244:7777/${project}/`;
+  try {
+    const response = await axios.get(url, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+      },
+    });
+    return { html: htmlReduce(response.data) };
+  } catch (error) {
+    return {
+      html: `获取${project}项目全部版本页面失败：` + (error as any).message,
+    };
+  }
+}
+
+// 新增：爬取 http://192.168.1.244:7777/ 首页内容
+async function fetchAllProjects() {
+  const url = "http://192.168.1.244:7777/";
+  try {
+    const response = await axios.get(url, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+      },
+    });
+
+    // 处理响应内容
+    let html = htmlReduce(response.data);
+
+    // 添加项目映射信息到响应中
+    const projectMappingScript = `
+      <script type="application/json" id="project-name-mapping">
+        ${JSON.stringify(projectNameMap)}
+      </script>
+    `;
+    html = html.replace("</body>", `${projectMappingScript}</body>`);
+
+    return { html };
+  } catch (error) {
+    return { html: "获取首页内容失败：" + (error as any).message };
+  }
+}
+
+// 优化工具名称和描述
+// 1. 获取全部项目列表
+server.tool(
+  "fetch_all_projects",
+  "获取 http://192.168.1.244:7777/ 下全部项目列表页面内容（只返回 html 字符串）",
+  {},
+  async () => {
+    const result = await fetchAllProjects();
+    return {
+      content: [
+        {
+          type: "text",
+          text: result.html,
+          mimeType: "text/html",
+        },
+      ],
+    };
+  }
+);
+// 2. 获取指定项目全部版本列表
+server.tool(
+  "fetch_project_versions",
+  "获取 http://192.168.1.244:7777/{project}/ 下指定项目的全部版本列表页面内容（只返回 html 字符串）",
+  {
+    project: z.string().describe("项目名称，如 yishou"),
+  },
+  async ({ project }) => {
+    const result = await fetchProjectVersions(project);
+    return {
+      content: [
+        {
+          type: "text",
+          text: result.html,
+          mimeType: "text/html",
+        },
+      ],
+    };
+  }
+);
+
 // 启动服务器
 const transport = new StdioServerTransport();
 await server.connect(transport);
@@ -271,7 +395,7 @@ await server.connect(transport);
 // 本地调试时直接调用 node build/index.js
 if (config.saveScreenshot) {
   (async () => {
-    const result = await fetchPrd(config.url);
+    const result = await fetchProjectVersions("yishou");
     console.log(result);
   })();
 }
