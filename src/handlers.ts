@@ -62,10 +62,10 @@ async function isProjectVersions(
 async function fetchPrd(
   url: string
 ): Promise<{ html: string; screenshot: string }> {
-  const isProjectVersionsResult = await isProjectVersions(url);
-  if (isProjectVersionsResult) {
-    return isProjectVersionsResult;
-  }
+  // const isProjectVersionsResult = await isProjectVersions(url);
+  // if (isProjectVersionsResult) {
+  //   return isProjectVersionsResult;
+  // }
   let processedUrl = url;
   let pageName = "";
   if (url.includes("#")) {

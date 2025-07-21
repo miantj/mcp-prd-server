@@ -2,7 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import fs from "fs";
-import { config, projectListPath, projectVersionsPath, } from "./config.js";
+import { config, projectListPath, projectVersionsPath } from "./config.js";
 import { registerTools } from "./tools.js";
 import { fetchPrd, fetchAndSaveAllPrd } from "./handlers.js";
 // 读取项目和版本数据前，判断文件是否存在，不存在则自动生成

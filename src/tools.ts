@@ -82,8 +82,10 @@ function registerTools(server: any) {
   // 获取全部项目列表
   server.tool(
     "fetch_all_projects",
-    "获取 http://192.168.1.244:7777/ 下全部项目列表页面内容（只返回 html 字符串）",
-    {},
+    "获取公司的项目列表，返回 html 字符串页面内容",
+    {
+      prompt: z.string().describe("用户需求描述或提示词，如：获取公司全部项目列表"),
+    },
     async () => {
       const result = await fetchAllProjects();
       return {
@@ -101,7 +103,7 @@ function registerTools(server: any) {
   // 获取指定项目全部版本列表
   server.tool(
     "fetch_project_versions",
-    "获取 http://192.168.1.244:7777/{project}/ 下指定项目的全部版本列表页面内容（只返回 html 字符串）",
+    "知道项目名的前提下，获取公司指定项目的全部版本号列表，返回 html 字符串页面内容",
     {
       project: z.string().describe("项目名称，如 yishou"),
     },
