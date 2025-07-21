@@ -1,0 +1,47 @@
+# 源代码文件（已编译到 build 目录）
+src/
+
+# 开发相关文件
+.cursor/
+.vscode/
+*.log
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 依赖目录
+node_modules/
+
+# 测试文件
+test/
+tests/
+__tests__/
+*.test.js
+*.test.ts
+*.spec.js
+*.spec.ts
+
+# 配置文件
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# 文档和示例
+docs/
+examples/
+screenshots/
+
+# 数据文件
+data/
+
+# 构建工具配置
+webpack.config.js
+rollup.config.js
+vite.config.js
+
+# 其他
+.git/
+.gitignore 
