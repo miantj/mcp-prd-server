@@ -1,6 +1,6 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
-# dependencies
+
 /node_modules
 /screenshots
 /data
@@ -28,16 +28,6 @@ next-env.d.ts
 
 tailwind-playground.css
 
-# 忽略public/yishou-js-sdk.min.js，因为这个文件是在编译时拷贝而来
-public/yishou-js-sdk.min.js
-public/yishou-js-sdk.js
-public/scripts/eruda.js
-public/scripts/eruda.js.map
-public/scripts/vconsole.min.js
-# Sentry Auth Token
-.sentyclirc
-
-storybook-static
 
 # ide
 .idea

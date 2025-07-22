@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 // 只保留一次 import，每个依赖只导入一次
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";

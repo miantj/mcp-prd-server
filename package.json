@@ -1,6 +1,6 @@
 {
   "name": "mcp-prd-server",
-  "version": "1.0.0",
+  "version": "0.1.5",
   "description": "MCP Server for PRD content management",
   "main": "build/index.js",
   "type": "module",
@@ -12,6 +12,7 @@
     "start": "node build/index.js",
     "dev": "tsc -w",
     "prepublishOnly": "npm run build",
+    "postinstall": "chmod +x build/index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "files": [
