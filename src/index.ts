@@ -36,7 +36,9 @@ async function main() {
     // 本地调试时直接调用 node build/index.js
     if (config.saveScreenshot) {
       (async () => {
-        const result = await fetchAndSaveAllPrd();
+        const result = await fetchAndSaveAllPrd({
+          monthsToLoad: 1, // 默认加载最近1个月的文档
+        });
         console.log(result);
       })();
     }

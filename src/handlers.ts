@@ -336,7 +336,13 @@ async function fetchAllProjects(): Promise<{ html: string }> {
 }
 
 // 定时爬取所有项目和版本并保存为JSON
-async function fetchAndSaveAllPrd(): Promise<void> {
+async function fetchAndSaveAllPrd(options?: {
+  monthsToLoad?: number; // 加载最近几个月的文档，默认1个月
+}): Promise<void> {
+  const {
+    monthsToLoad = 1 // 默认加载最近1个月
+  } = options || {};
+
   // 1. 获取项目列表页HTML
   const url = "http://192.168.1.244:7777/";
   let html = "";
@@ -352,9 +358,14 @@ async function fetchAndSaveAllPrd(): Promise<void> {
     console.error("获取项目列表页失败：", e);
     return;
   }
+  
   // 2. 提取所有项目文件夹名（过滤掉 ..）
-  const matches = [...html.matchAll(/<a href="([^\/?#]+)\//g)];
-  let projectNames = matches.map((m) => m[1]).filter((name) => name !== "..");
+  const projectMatches = [...html.matchAll(/<a href="([^\/?#]+)\//g)];
+  let projectNames = projectMatches.map((m) => m[1]).filter((name) => name !== "..");
+  
+  // 获取所有项目，不进行筛选
+  console.log(`获取所有项目：${projectNames.join(", ")}`);
+  
   // 3. 保存为 JSON 文件
   const dataDir = path.join(process.cwd(), "data");
   if (!fs.existsSync(dataDir)) {
@@ -363,6 +374,7 @@ async function fetchAndSaveAllPrd(): Promise<void> {
   const savePath = path.join(dataDir, "project_list.json");
   fs.writeFileSync(savePath, JSON.stringify(projectNames, null, 2), "utf-8");
   console.log("已保存项目列表到", savePath);
+  
   // 4. 递归抓取每个项目下的所有版本目录（过滤掉 ..）
   const allVersions: Record<string, any[]> = {};
   for (const project of projectNames) {
@@ -378,9 +390,23 @@ async function fetchAndSaveAllPrd(): Promise<void> {
       const versionMatches = [
         ...projectHtml.matchAll(/<a href="([^\/?#]+)\//g),
       ];
-      const versionNames = versionMatches
+      let versionNames = versionMatches
         .map((m) => m[1])
         .filter((v) => v !== "..");
+      
+      // 提取版本时间信息 - 使用更简单的匹配
+      const versionTimeMap = new Map();
+      const versionTimeMatches = [...projectHtml.matchAll(/<a href="([^\/?#]+)\/">[^<]+<\/a>\s*(\d{1,2}-[A-Za-z]{3}-\d{4}\s+\d{1,2}:\d{2})/g)];
+      versionTimeMatches.forEach((match) => {
+        const versionName = match[1];
+        const timeStr = match[2];
+        if (versionName !== "..") {
+          versionTimeMap.set(versionName, timeStr);
+        }
+      });
+      
+      // 获取所有版本，不进行筛选
+      console.log(`项目 ${project}: 获取所有版本：${versionNames.join(", ")}`);
       
       // 为每个版本获取url和首页内容 - 使用浏览器管理器和并发限制
       const versionsWithContent = [];
@@ -394,39 +420,190 @@ async function fetchAndSaveAllPrd(): Promise<void> {
           batch.map(async (version) => {
             const versionUrl = `http://192.168.1.244:7777/${project}/${version}/`;
             let versionContent = "";
-            try {
-              const page = await browserManager.createPage();
-              try {
-                // 设置更短的超时时间
-                await page.goto(versionUrl, {
-                  waitUntil: "domcontentloaded", // 改为更快的等待条件
-                  timeout: 15000, // 减少超时时间
-                });
-                
-                // 等待页面渲染完成
-                await new Promise(resolve => setTimeout(resolve, 1000)); // 减少等待时间
-                
-                // 获取渲染后的纯文本内容
-                versionContent = await page.evaluate(() => {
-                  // 移除script和style标签
-                  const scripts = document.querySelectorAll('script, style');
-                  scripts.forEach(script => script.remove());
-                  
-                  // 获取纯文本内容
-                  return document.body ? document.body.innerText : document.documentElement.innerText;
-                });
-              } finally {
-                await page.close();
+            
+            // 检查是否需要获取内容（根据时间筛选条件）
+            let shouldGetContent = true;
+            
+            if (monthsToLoad > 0) {
+              // 获取版本时间信息
+              const versionTime = versionTimeMap.get(version);
+              if (versionTime) {
+                shouldGetContent = isWithinLastMonths(versionTime, monthsToLoad);
+                if (shouldGetContent) {
+                  console.log(`✅ 版本 ${version} 在最近 ${monthsToLoad} 个月内 (${versionTime})`);
+                } else {
+                  console.log(`⏭️ 跳过版本 ${version}，不在最近 ${monthsToLoad} 个月内 (${versionTime})`);
+                }
+              } else {
+                console.log(`⚠️ 版本 ${version} 没有时间信息，跳过`);
+                shouldGetContent = false;
               }
-            } catch (e: any) {
-              console.error(`获取项目 ${project} 版本 ${version} 内容失败：`, e);
-              versionContent = `获取失败: ${e.message}`;
+            } else {
+              // 当monthsToLoad为0时，获取所有内容
+              shouldGetContent = true;
+              console.log(`📋 获取所有版本内容，包括 ${version}`);
+            }
+            
+            if (shouldGetContent) {
+              try {
+                const page = await browserManager.createPage();
+                try {
+                  // 设置更长的超时时间，确保页面完全加载
+                  await page.goto(versionUrl, {
+                    waitUntil: "networkidle0", // 等待网络空闲，确保页面完全加载
+                    timeout: 15000, // 增加超时时间
+                  });
+                  
+                  // 等待页面渲染完成
+                  await new Promise(resolve => setTimeout(resolve, 1000)); // 减少等待时间
+                  
+                  // 获取渲染后的内容
+                  versionContent = await page.evaluate(() => {
+                    // 移除script和style标签
+                    const scripts = document.querySelectorAll('script, style');
+                    scripts.forEach(script => script.remove());
+                    
+                    // 获取页面标题，尝试多种方式
+                    let title = document.title || '';
+                    
+                    // 如果标题是默认值，尝试从其他元素获取
+                    if (!title || title === 'Untitled Document' || title === 'Document') {
+                      // 尝试从 h1 标签获取
+                      const h1 = document.querySelector('h1');
+                      if (h1 && h1.textContent) {
+                        title = h1.textContent.trim();
+                      } else {
+                        // 尝试从页面中查找可能的标题
+                        const possibleTitles = document.querySelectorAll('h1, h2, h3, .title, .header, [class*="title"], [class*="header"]');
+                        for (const element of possibleTitles) {
+                          const text = element.textContent?.trim();
+                          if (text && text.length > 0 && text.length < 100) {
+                            title = text;
+                            break;
+                          }
+                        }
+                      }
+                    }
+                    
+                    // 获取所有文本内容，包括结构化的信息
+                    let content = '';
+                    
+                    // 获取body内容
+                    if (document.body) {
+                      // 优先获取主要内容区域
+                      const mainContent = document.querySelector('main, .main, .content, .container, #content, #main') || document.body;
+                      
+                      // 获取所有可见的文本节点，但优先处理主要内容区域
+                      const walker = document.createTreeWalker(
+                        mainContent,
+                        NodeFilter.SHOW_TEXT,
+                        {
+                          acceptNode: function(node) {
+                            const parent = node.parentElement;
+                            if (!parent) return NodeFilter.FILTER_REJECT;
+                            
+                            // 跳过隐藏元素
+                            const style = window.getComputedStyle(parent);
+                            if (style.display === 'none' || style.visibility === 'hidden') {
+                              return NodeFilter.FILTER_REJECT;
+                            }
+                            
+                            // 跳过script和style标签
+                            if (parent.tagName === 'SCRIPT' || parent.tagName === 'STYLE') {
+                              return NodeFilter.FILTER_REJECT;
+                            }
+                            
+                            // 跳过导航和工具栏
+                            if (parent.closest('nav, .nav, .navigation, .toolbar, .header, .footer')) {
+                              return NodeFilter.FILTER_REJECT;
+                            }
+                            
+                            return NodeFilter.FILTER_ACCEPT;
+                          }
+                        }
+                      );
+                      
+                      const textNodes = [];
+                      let node;
+                      while (node = walker.nextNode()) {
+                        const text = node.textContent?.trim();
+                        if (text && text.length > 0) {
+                          // 过滤掉一些无用的文本
+                          const uselessPatterns = [
+                            /^(CLOSE|Local Preview|Share Prototype|Show Note Markers|Show Hotspots|Default Scale|Scale to Width|Scale to Fit|Use|and|keys|to move between pages|No notes for this page|Notes added in Axure RP will appear here)$/,
+                            /^\(\d+ of \d+\)$/, // (1 of 12)
+                            /^\(\d+ x \w+\)$/, // (1920 x any)
+                            /^\(\w+ x \w+\)$/, // (any x any)
+                            /^(Pages|Adaptive)$/,
+                            /^[A-Z\s]+$/, // 全大写字母
+                            /^\d+$/, // 纯数字
+                            /^[^\u4e00-\u9fa5a-zA-Z0-9]+$/, // 不包含中文、英文、数字的文本
+                          ];
+                          
+                          const isUseless = uselessPatterns.some(pattern => pattern.test(text));
+                          if (!isUseless && text.length > 1) {
+                            textNodes.push(text);
+                          }
+                        }
+                      }
+                      
+                      content = textNodes.join('\n');
+                    }
+                    
+                    // 如果没有获取到内容，使用innerText作为备选
+                    if (!content) {
+                      content = document.body ? document.body.innerText : document.documentElement.innerText;
+                    }
+                    
+                    // 组合标题和内容，添加结构化信息
+                    let result = '';
+                    if (title) {
+                      result += `标题: ${title}\n\n`;
+                    }
+                    
+                    if (content) {
+                      // 尝试提取页面结构信息
+                      const sections = content.split('\n')
+                        .filter(line => line.trim().length > 0)
+                        .filter(line => {
+                          // 进一步过滤无意义的内容
+                          const trimmed = line.trim();
+                          return trimmed.length > 2 && 
+                                 !trimmed.match(/^[^\u4e00-\u9fa5a-zA-Z0-9]+$/) && // 包含有意义字符
+                                 !trimmed.match(/^[A-Z\s]+$/) && // 不是全大写
+                                 !trimmed.match(/^\d+$/) && // 不是纯数字
+                                 !trimmed.match(/^\(\d+ of \d+\)$/) && // 不是页码
+                                 !trimmed.match(/^\(\d+ x \w+\)$/) && // 不是尺寸信息
+                                 !trimmed.match(/^(Pages|Adaptive|CLOSE)$/); // 不是工具按钮
+                        });
+                      
+                      if (sections.length > 0) {
+                        result += `页面内容:\n`;
+                        sections.forEach((section, index) => {
+                          result += `${index + 1}. ${section}\n`;
+                        });
+                      }
+                    }
+                    
+                    return result || '无内容';
+                  });
+                } finally {
+                  await page.close();
+                }
+              } catch (e: any) {
+                console.error(`获取项目 ${project} 版本 ${version} 内容失败：`, e);
+                versionContent = `获取失败: ${e.message}`;
+              }
+            } else {
+              // 如果不需要获取内容，只保存基本信息
+              versionContent = "";
             }
             
             return {
               name: version,
               url: versionUrl,
-              content: versionContent
+              content: versionContent,
+              lastModified: versionTimeMap.get(version) || null
             };
           })
         );
@@ -436,12 +613,15 @@ async function fetchAndSaveAllPrd(): Promise<void> {
         console.log(`项目 ${project}: 已完成 ${Math.min(i + concurrencyLimit, versionNames.length)}/${versionNames.length} 个版本`);
       }
       
+      // 如果只获取筛选的内容，只保存有内容的版本
+      // 这里不再需要onlyFilteredContent，因为它是全局筛选
       allVersions[project] = versionsWithContent;
     } catch (e: any) {
       console.error(`获取项目 ${project} 版本目录失败：`, e);
       allVersions[project] = [];
     }
   }
+  
   const versionSavePath = path.join(dataDir, "project_versions.json");
   fs.writeFileSync(
     versionSavePath,
@@ -455,6 +635,42 @@ async function fetchAndSaveAllPrd(): Promise<void> {
 async function cleanupBrowser(): Promise<void> {
   const browserManager = BrowserManager.getInstance();
   await browserManager.closeBrowser();
+}
+
+// 时间解析函数
+function parseTimeString(timeStr: string): Date {
+  // 解析格式如 "19-Apr-2022 16:14"
+  const months: { [key: string]: number } = {
+    'Jan': 0, 'Feb': 1, 'Mar': 2, 'Apr': 3, 'May': 4, 'Jun': 5,
+    'Jul': 6, 'Aug': 7, 'Sep': 8, 'Oct': 9, 'Nov': 10, 'Dec': 11
+  };
+  
+  const match = timeStr.match(/(\d{1,2})-([A-Za-z]{3})-(\d{4})\s+(\d{1,2}):(\d{2})/);
+  if (!match) {
+    throw new Error(`无法解析时间格式: ${timeStr}`);
+  }
+  
+  const [, day, month, year, hour, minute] = match;
+  return new Date(
+    parseInt(year),
+    months[month],
+    parseInt(day),
+    parseInt(hour),
+    parseInt(minute)
+  );
+}
+
+// 检查时间是否在最近N个月内
+function isWithinLastMonths(timeStr: string, months: number): boolean {
+  try {
+    const versionDate = parseTimeString(timeStr);
+    const monthsAgo = new Date();
+    monthsAgo.setMonth(monthsAgo.getMonth() - months);
+    return versionDate >= monthsAgo;
+  } catch (error) {
+    console.warn(`时间解析失败: ${timeStr}`, error);
+    return false;
+  }
 }
 
 export {

@@ -17,6 +17,7 @@ export const config = {
   saveScreenshot: true, // 是否保存截图
   screenshotDir: "screenshots", // 截图保存目录
   url: "http://192.168.1.244:7777/yishou/7.58.0", // 截图保存目录
+  monthsToLoad: 1, // 加载最近几个月的文档，默认1个月
 };
 
 // 数据目录和文件路径
@@ -29,4 +30,4 @@ if (config.saveScreenshot) {
   if (!fs.existsSync(config.screenshotDir)) {
     fs.mkdirSync(config.screenshotDir, { recursive: true });
   }
-} 
+}
