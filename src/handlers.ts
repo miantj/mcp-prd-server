@@ -14,6 +14,93 @@ import {
   getCreatorResult,
 } from "./utils.js";
 
+// 浏览器实例管理器
+class BrowserManager {
+  private static instance: BrowserManager;
+  private browser: puppeteer.Browser | null = null;
+  private isInitializing = false;
+  private initPromise: Promise<puppeteer.Browser> | null = null;
+
+  private constructor() {}
+
+  static getInstance(): BrowserManager {
+    if (!BrowserManager.instance) {
+      BrowserManager.instance = new BrowserManager();
+    }
+    return BrowserManager.instance;
+  }
+
+  async getBrowser(): Promise<puppeteer.Browser> {
+    if (this.browser) {
+      return this.browser;
+    }
+
+    if (this.isInitializing) {
+      return this.initPromise!;
+    }
+
+    this.isInitializing = true;
+    this.initPromise = puppeteer.launch({
+      headless: true,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-features=HttpsFirstBalancedModeAutoEnable",
+        "--disable-dev-shm-usage", // 减少内存使用
+        "--disable-gpu", // 禁用GPU加速
+        "--no-first-run", // 跳过首次运行设置
+        "--no-default-browser-check", // 跳过默认浏览器检查
+      ],
+    });
+
+    try {
+      this.browser = await this.initPromise;
+      console.log("浏览器实例已启动");
+      return this.browser;
+    } catch (error) {
+      this.isInitializing = false;
+      this.initPromise = null;
+      throw error;
+    }
+  }
+
+  async closeBrowser(): Promise<void> {
+    if (this.browser) {
+      await this.browser.close();
+      this.browser = null;
+      this.isInitializing = false;
+      this.initPromise = null;
+      console.log("浏览器实例已关闭");
+    }
+  }
+
+  async createPage(): Promise<puppeteer.Page> {
+    const browser = await this.getBrowser();
+    const page = await browser.newPage();
+    
+    // 设置页面性能优化
+    await page.setViewport({ width: 1920, height: 1080 });
+    await page.setRequestInterception(true);
+    
+    // 拦截不必要的资源请求以提高性能
+    page.on('request', (req) => {
+      const resourceType = req.resourceType();
+      if (['image', 'stylesheet', 'font', 'media'].includes(resourceType)) {
+        req.abort();
+      } else {
+        req.continue();
+      }
+    });
+
+    // 修改 navigator.webdriver
+    await page.evaluateOnNewDocument(() => {
+      delete Object.getPrototypeOf(navigator).webdriver;
+    });
+
+    return page;
+  }
+}
+
 // 类型声明
 interface ProjectVersionResult {
   valid?: boolean;
@@ -87,31 +174,21 @@ async function fetchPrd(
     const htmlStr = htmlReduce(response.data);
     console.log("htmlStr", htmlStr);
     // 获取页面截图
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: [
-        "--no-sandbox", // 禁用沙箱模式,在某些Linux环境下必需
-        "--disable-setuid-sandbox", // 禁用setuid沙箱,配合no-sandbox使用
-        "--disable-features=HttpsFirstBalancedModeAutoEnable",
-      ],
-    });
+    const browserManager = BrowserManager.getInstance();
+    const page = await browserManager.createPage();
     try {
-      const page = await browser.newPage();
-      // 修改 navigator.webdriver
-      await page.evaluateOnNewDocument(() => {
-        delete Object.getPrototypeOf(navigator).webdriver;
-      });
       await page.goto(processedUrl, {
-        waitUntil: "networkidle0",
-        timeout: 30000,
+        waitUntil: "domcontentloaded", // 使用更快的等待条件
+        timeout: 15000, // 减少超时时间
       });
-      await page.setViewport({ width: 1920, height: 1080 });
+      
       // 直接获取base64截图数据
       const screenshot = await page.screenshot({
         encoding: "base64",
         fullPage: true,
         type: "png",
       });
+      
       // 如果开启了保存截图功能，保存图片到本地
       if (config.saveScreenshot) {
         const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -124,13 +201,13 @@ async function fetchPrd(
         );
         console.log(`Screenshot saved to: ${filepath}`);
       }
-      await page.close();
+      
       return {
         html: htmlStr,
         screenshot: screenshot as string, // 直接返回base64字符串，不添加data URL前缀
       };
     } finally {
-      await browser.close();
+      await page.close();
     }
   } catch (error: any) {
     return {
@@ -287,7 +364,7 @@ async function fetchAndSaveAllPrd(): Promise<void> {
   fs.writeFileSync(savePath, JSON.stringify(projectNames, null, 2), "utf-8");
   console.log("已保存项目列表到", savePath);
   // 4. 递归抓取每个项目下的所有版本目录（过滤掉 ..）
-  const allVersions: Record<string, string[]> = {};
+  const allVersions: Record<string, any[]> = {};
   for (const project of projectNames) {
     try {
       const projectUrl = `http://192.168.1.244:7777/${project}/`;
@@ -301,9 +378,65 @@ async function fetchAndSaveAllPrd(): Promise<void> {
       const versionMatches = [
         ...projectHtml.matchAll(/<a href="([^\/?#]+)\//g),
       ];
-      allVersions[project] = versionMatches
+      const versionNames = versionMatches
         .map((m) => m[1])
         .filter((v) => v !== "..");
+      
+      // 为每个版本获取url和首页内容 - 使用浏览器管理器和并发限制
+      const versionsWithContent = [];
+      const browserManager = BrowserManager.getInstance();
+      
+      // 限制并发数量，避免系统负载过高
+      const concurrencyLimit = 3;
+      for (let i = 0; i < versionNames.length; i += concurrencyLimit) {
+        const batch = versionNames.slice(i, i + concurrencyLimit);
+        const batchResults = await Promise.all(
+          batch.map(async (version) => {
+            const versionUrl = `http://192.168.1.244:7777/${project}/${version}/`;
+            let versionContent = "";
+            try {
+              const page = await browserManager.createPage();
+              try {
+                // 设置更短的超时时间
+                await page.goto(versionUrl, {
+                  waitUntil: "domcontentloaded", // 改为更快的等待条件
+                  timeout: 15000, // 减少超时时间
+                });
+                
+                // 等待页面渲染完成
+                await new Promise(resolve => setTimeout(resolve, 1000)); // 减少等待时间
+                
+                // 获取渲染后的纯文本内容
+                versionContent = await page.evaluate(() => {
+                  // 移除script和style标签
+                  const scripts = document.querySelectorAll('script, style');
+                  scripts.forEach(script => script.remove());
+                  
+                  // 获取纯文本内容
+                  return document.body ? document.body.innerText : document.documentElement.innerText;
+                });
+              } finally {
+                await page.close();
+              }
+            } catch (e: any) {
+              console.error(`获取项目 ${project} 版本 ${version} 内容失败：`, e);
+              versionContent = `获取失败: ${e.message}`;
+            }
+            
+            return {
+              name: version,
+              url: versionUrl,
+              content: versionContent
+            };
+          })
+        );
+        versionsWithContent.push(...batchResults);
+        
+        // 添加进度日志
+        console.log(`项目 ${project}: 已完成 ${Math.min(i + concurrencyLimit, versionNames.length)}/${versionNames.length} 个版本`);
+      }
+      
+      allVersions[project] = versionsWithContent;
     } catch (e: any) {
       console.error(`获取项目 ${project} 版本目录失败：`, e);
       allVersions[project] = [];
@@ -318,6 +451,12 @@ async function fetchAndSaveAllPrd(): Promise<void> {
   console.log("已保存所有项目版本到", versionSavePath);
 }
 
+// 清理函数，用于应用退出时关闭浏览器实例
+async function cleanupBrowser(): Promise<void> {
+  const browserManager = BrowserManager.getInstance();
+  await browserManager.closeBrowser();
+}
+
 export {
   isProjectVersions,
   fetchPrd,
@@ -325,4 +464,5 @@ export {
   fetchProjectVersions,
   fetchAllProjects,
   fetchAndSaveAllPrd,
+  cleanupBrowser,
 };

@@ -6,7 +6,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import fs from "fs";
 import { config, projectListPath, projectVersionsPath } from "./config.js";
 import { registerTools } from "./tools.js";
-import { fetchPrd, fetchAndSaveAllPrd } from "./handlers.js";
+import { fetchPrd, fetchAndSaveAllPrd, cleanupBrowser } from "./handlers.js";
 
 async function main() {
   try {
@@ -36,17 +36,36 @@ async function main() {
     // 本地调试时直接调用 node build/index.js
     if (config.saveScreenshot) {
       (async () => {
-        const result = await fetchPrd(config.url);
+        const result = await fetchAndSaveAllPrd();
         console.log(result);
       })();
     }
+    
+    // 注册进程退出时的清理函数
+    process.on('SIGINT', async () => {
+      console.log('正在关闭浏览器实例...');
+      await cleanupBrowser();
+      process.exit(0);
+    });
+    
+    process.on('SIGTERM', async () => {
+      console.log('正在关闭浏览器实例...');
+      await cleanupBrowser();
+      process.exit(0);
+    });
+    
+    process.on('exit', async () => {
+      await cleanupBrowser();
+    });
   } catch (error) {
     console.error("PRD-Server 启动失败:", error);
+    await cleanupBrowser();
     process.exit(1);
   }
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
   console.error("PRD-Server 运行时错误:", error);
+  await cleanupBrowser();
   process.exit(1);
 });

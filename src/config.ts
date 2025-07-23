@@ -14,7 +14,7 @@ export const projectNameMap = {
 
 // 配置项
 export const config = {
-  saveScreenshot: false, // 是否保存截图
+  saveScreenshot: true, // 是否保存截图
   screenshotDir: "screenshots", // 截图保存目录
   url: "http://192.168.1.244:7777/yishou/7.58.0", // 截图保存目录
 };
