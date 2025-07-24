@@ -20,7 +20,6 @@ async function testSearchDocuments() {
         if (results.length === 0) {
           console.log("  没有找到相关文档");
         } else {
-          console.log(results); 
           results.forEach((result, index) => {
             console.log(`\n${index + 1}. ${result.title}`);
             console.log(`   项目: ${result.project}`);

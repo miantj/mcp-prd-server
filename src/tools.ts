@@ -8,6 +8,7 @@ import {
   buildDocumentIndex,
   fetchAndSaveAllPrd,
 } from "./handlers.js";
+import { projectNameMap } from "./config.js";
 
 // registerTools: 统一注册所有server.tool
 function registerTools(server: any) {
@@ -25,12 +26,16 @@ function registerTools(server: any) {
       if (useAll) {
         const result = await fetchHtmlWithContentImpl(url);
         return {
-          ai_end: true, // 终止标记
           content: [
             {
               type: "text",
               text: JSON.stringify(result),
               mimeType: "text/plain",
+            },
+            {
+              type: "text",
+              text: JSON.stringify({ projectNameMap }, null, 2),
+              mimeType: "application/json",
             },
           ],
         };
@@ -38,34 +43,39 @@ function registerTools(server: any) {
         try {
           const result = await fetchPrd(url);
           return {
-            ai_end: true, // 终止标记
-            content: result.screenshot
-              ? [
-                  {
-                    type: "text",
-                    text: result.html,
-                    mimeType: "text/html",
-                  },
-                  {
-                    type: "image",
-                    data: result.screenshot.replace(
-                      /^data:image\/png;base64,/,
-                      ""
-                    ),
-                    mimeType: "image/png",
-                  },
-                ]
-              : [
-                  {
-                    type: "text",
-                    text: result.html,
-                    mimeType: "text/html",
-                  },
-                ],
+            content: [
+              ...(result.screenshot
+                ? [
+                    {
+                      type: "text",
+                      text: result.html,
+                      mimeType: "text/html",
+                    },
+                    {
+                      type: "image",
+                      data: result.screenshot.replace(
+                        /^data:image\/png;base64,/,
+                        ""
+                      ),
+                      mimeType: "image/png",
+                    },
+                  ]
+                : [
+                    {
+                      type: "text",
+                      text: result.html,
+                      mimeType: "text/html",
+                    },
+                  ]),
+              {
+                type: "text",
+                text: JSON.stringify({ projectNameMap }, null, 2),
+                mimeType: "application/json",
+              },
+            ],
           };
         } catch (error) {
           return {
-            ai_end: true, // 终止标记
             content: [
               {
                 type: "text",
@@ -98,6 +108,11 @@ function registerTools(server: any) {
             text: "成功更新所有项目的PRD文档",
             mimeType: "text/plain",
           },
+          {
+            type: "text",
+            text: JSON.stringify({ projectNameMap }, null, 2),
+            mimeType: "application/json",
+          },
         ];
       } catch (error) {
         return [
@@ -126,6 +141,11 @@ function registerTools(server: any) {
             type: "text",
             text: result.html,
             mimeType: "text/html",
+          },
+          {
+            type: "text",
+            text: JSON.stringify({ projectNameMap }, null, 2),
+            mimeType: "application/json",
           },
         ],
       };
