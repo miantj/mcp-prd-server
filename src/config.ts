@@ -14,9 +14,9 @@ export const projectNameMap = {
 
 // 配置项
 export const config = {
-  saveScreenshot: true, // 是否保存截图
+  saveScreenshot: false, // 是否保存截图
   screenshotDir: "screenshots", // 截图保存目录
-  url: "http://192.168.1.244:7777/yishou/7.58.0", // 截图保存目录
+  url: "https://prd-upload-pub.yishouapp.com/prd/yishou/7.59.0/#id=g8yvfk&p=%E8%A1%A5%E5%81%BF%E9%85%8D%E7%BD%AE&g=1", // 截图保存目录
   monthsToLoad: 1, // 加载最近几个月的文档，默认1个月
 };
 
@@ -24,6 +24,12 @@ export const config = {
 export const dataDir = path.join(process.cwd(), "data");
 export const projectListPath = path.join(dataDir, "project_list.json");
 export const projectVersionsPath = path.join(dataDir, "project_versions.json");
+
+// 确保数据目录存在
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+  console.log(`数据目录已创建: ${dataDir}`);
+}
 
 // 确保截图目录存在
 if (config.saveScreenshot) {

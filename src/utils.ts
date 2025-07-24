@@ -7,12 +7,23 @@ import {
   projectNameMap,
 } from "./config.js";
 
-export const projectList = JSON.parse(
-  fs.readFileSync(projectListPath, "utf-8")
-);
-export const projectVersions = JSON.parse(
-  fs.readFileSync(projectVersionsPath, "utf-8")
-);
+// 安全读取JSON文件
+function safeReadJsonFile(filePath: string, defaultValue: any = []) {
+  try {
+    if (!fs.existsSync(filePath)) {
+      console.warn(`文件不存在: ${filePath}，使用默认值`);
+      return defaultValue;
+    }
+    const content = fs.readFileSync(filePath, "utf-8");
+    return JSON.parse(content);
+  } catch (error) {
+    console.error(`读取文件失败: ${filePath}`, error);
+    return defaultValue;
+  }
+}
+
+export const projectList = safeReadJsonFile(projectListPath, []);
+export const projectVersions = safeReadJsonFile(projectVersionsPath, {});
 
 // 检查项目是否有效
 export function isValidProject(project: string): boolean {

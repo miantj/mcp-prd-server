@@ -4,9 +4,11 @@ import { z } from "zod";
 import {
   fetchPrd,
   fetchHtmlWithContentImpl,
-  fetchProjectVersions,
+  fetchAndSaveAllPrd,
   fetchAllProjects,
   isProjectVersions,
+  searchDocuments,
+  buildDocumentIndex,
 } from "./handlers.js";
 
 // registerTools: 统一注册所有server.tool
@@ -20,104 +22,160 @@ function registerTools(server: any) {
       prompt: z.string().describe("用户需求描述或提示词"),
     },
     async ({ url, prompt }: { url: string; prompt: string }) => {
-      const keywords = ["全部", "所有", "整体"];
-      const useAll = keywords.some((k) => prompt.includes(k));
-      if (useAll) {
-        const result = await fetchHtmlWithContentImpl(url);
-        return {
-          ai_end: true, // 终止标记
-          content: [
+      try {
+        const keywords = ["全部", "所有", "整体"];
+        const useAll = keywords.some((k) => prompt.includes(k));
+        if (useAll) {
+          const result = await fetchHtmlWithContentImpl(url);
+          return [
             {
               type: "text",
-              text: JSON.stringify(result),
-              mimeType: "text/plain",
+              text: JSON.stringify(result, null, 2),
+              mimeType: "application/json",
             },
-          ],
-        };
-      } else {
-        try {
+          ];
+        } else {
           const result = await fetchPrd(url);
-          return {
-            ai_end: true, // 终止标记
-            content: result.screenshot
-              ? [
-                  {
-                    type: "text",
-                    text: result.html,
-                    mimeType: "text/html",
-                  },
-                  {
-                    type: "image",
-                    data: result.screenshot.replace(
-                      /^data:image\/png;base64,/,
-                      ""
-                    ),
-                    mimeType: "image/png",
-                  },
-                ]
-              : [
-                  {
-                    type: "text",
-                    text: result.html,
-                    mimeType: "text/html",
-                  },
-                ],
-          };
-        } catch (error) {
-          return {
-            ai_end: true, // 终止标记
-            content: [
-              {
-                type: "text",
-                text: "获取PRD内容失败：" + error,
-                mimeType: "text/plain",
-              },
-            ],
-          };
+          return result.screenshot
+            ? [
+                {
+                  type: "text",
+                  text: result.html,
+                  mimeType: "text/html",
+                },
+                {
+                  type: "image",
+                  data: result.screenshot.replace(
+                    /^data:image\/png;base64,/,
+                    ""
+                  ),
+                  mimeType: "image/png",
+                },
+              ]
+            : [
+                {
+                  type: "text",
+                  text: result.html,
+                  mimeType: "text/html",
+                },
+              ];
         }
+      } catch (error: unknown) {
+        console.error("smart_fetch_prd 执行失败:", error);
+        return [
+          {
+            type: "text",
+            text: `获取PRD内容失败：${error}`,
+            mimeType: "text/plain",
+          },
+        ];
       }
     }
   );
 
-  // 获取全部项目列表
+  // 更新所有项目的PRD文档
   server.tool(
-    "fetch_all_projects",
-    "获取公司的项目列表，返回 html 字符串页面内容",
+    "fetch_all_prd",
+    "更新所有项目的PRD文档,必须用户强调更新,否则默认不执行",
     {
-      prompt: z.string().describe("用户需求描述或提示词，如：获取公司全部项目列表"),
+      monthsToLoad: z
+        .number()
+        .optional()
+        .describe("加载最近几个月的文档，默认1个月"),
     },
-    async () => {
-      const result = await fetchAllProjects();
-      return {
-        content: [
+    async ({ monthsToLoad }: { monthsToLoad?: number }) => {
+      try {
+        await fetchAndSaveAllPrd({ monthsToLoad });
+        return [
           {
             type: "text",
-            text: result.html,
-            mimeType: "text/html",
+            text: "成功更新所有项目的PRD文档",
+            mimeType: "text/plain",
           },
-        ],
-      };
+        ];
+      } catch (error) {
+        return [
+          {
+            type: "text",
+            text: `更新PRD文档失败: ${error}`,
+            mimeType: "text/plain",
+          },
+        ];
+      }
     }
   );
 
-  // 获取指定项目全部版本列表
+  // 搜索PRD文档
   server.tool(
-    "fetch_project_versions",
-    "知道项目名的前提下，获取公司指定项目的全部版本号列表，返回 html 字符串页面内容",
+    "search_prd_documents",
+    "根据关键词搜索PRD文档，返回匹配的文档列表",
     {
-      project: z.string().describe("项目名称，如 yishou"),
+      query: z.string().describe("搜索关键词，支持项目名、版本号、功能描述等"),
+      limit: z.number().optional().describe("返回结果数量限制，默认为20"),
     },
-    async ({ project }: { project: string }) => {
-      const result = await fetchProjectVersions(project);
-      return {
-        content: [
+    async ({ query, limit = 20 }: { query: string; limit?: number }) => {
+      try {
+        const results = await searchDocuments(query, limit);
+        return [
           {
             type: "text",
-            text: result.html,
-            mimeType: "text/html",
+            text: JSON.stringify(
+              {
+                query,
+                results: results.map((result) => ({
+                  title: result.title,
+                  project: result.project,
+                  version: result.version,
+                  url: result.url,
+                  summary: result.summary,
+                  relevance: result.relevance,
+                  matchType: result.matchType,
+                  matchedKeywords: result.matchedKeywords,
+                  pages: result.pages,
+                })),
+              },
+              null,
+              2
+            ),
+            mimeType: "application/json",
           },
-        ],
-      };
+        ];
+      } catch (error) {
+        return [
+          {
+            type: "text",
+            text: `搜索失败: ${error}`,
+            mimeType: "text/plain",
+          },
+        ];
+      }
+    }
+  );
+
+  // 构建文档索引
+  server.tool(
+    "build_document_index",
+    "重新从现有项目版本数据构建文档索引，用于支持智能搜索功能，默认已经构建了文档索引，如果不需要智能搜索，则不需要调用",
+    {},
+    async () => {
+      try {
+        await buildDocumentIndex();
+        return [
+          {
+            type: "text",
+            text: "文档索引构建完成",
+            mimeType: "text/plain",
+          },
+        ];
+      } catch (error) {
+        return [
+          {
+            type: "text",
+            text: `构建索引失败: ${error}`,
+            mimeType: "text/plain",
+          },
+        ];
+      }
     }
   );
 }
