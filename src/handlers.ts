@@ -211,10 +211,6 @@ async function isProjectVersions(
 async function fetchPrd(
   url: string
 ): Promise<{ html: string; screenshot: string }> {
-  // const isProjectVersionsResult = await isProjectVersions(url);
-  // if (isProjectVersionsResult) {
-  //   return isProjectVersionsResult;
-  // }
   let processedUrl = url;
   let pageName = "";
   if (url.includes("#")) {
@@ -285,10 +281,6 @@ async function fetchPrd(
 
 // 1. 获取全部页面内容，并返回树形结构
 async function fetchHtmlWithContentImpl(url: string): Promise<any> {
-  const isProjectVersionsResult = await isProjectVersions(url);
-  if (isProjectVersionsResult) {
-    return isProjectVersionsResult;
-  }
   // 处理URL格式
   let processedUrl = url;
   if (url.includes("#")) {
