@@ -17,7 +17,11 @@ function safeReadJsonFile(filePath: string, defaultValue: any = []) {
     const content = fs.readFileSync(filePath, "utf-8");
     return JSON.parse(content);
   } catch (error) {
-    console.error(`读取文件失败: ${filePath}`, error);
+    if (error instanceof SyntaxError) {
+      console.error(`JSON解析失败: ${filePath}`, error);
+    } else {
+      console.error(`读取文件失败: ${filePath}`, error);
+    }
     return defaultValue;
   }
 }

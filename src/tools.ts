@@ -4,11 +4,9 @@ import { z } from "zod";
 import {
   fetchPrd,
   fetchHtmlWithContentImpl,
-  fetchAndSaveAllPrd,
-  fetchAllProjects,
-  isProjectVersions,
-  searchDocuments,
+  fetchProjectVersions,
   buildDocumentIndex,
+  fetchAndSaveAllPrd,
 } from "./handlers.js";
 
 // registerTools: 统一注册所有server.tool
@@ -22,53 +20,61 @@ function registerTools(server: any) {
       prompt: z.string().describe("用户需求描述或提示词"),
     },
     async ({ url, prompt }: { url: string; prompt: string }) => {
-      try {
-        const keywords = ["全部", "所有", "整体"];
-        const useAll = keywords.some((k) => prompt.includes(k));
-        if (useAll) {
-          const result = await fetchHtmlWithContentImpl(url);
-          return [
+      const keywords = ["全部", "所有", "整体"];
+      const useAll = keywords.some((k) => prompt.includes(k));
+      if (useAll) {
+        const result = await fetchHtmlWithContentImpl(url);
+        return {
+          ai_end: true, // 终止标记
+          content: [
             {
               type: "text",
-              text: JSON.stringify(result, null, 2),
-              mimeType: "application/json",
+              text: JSON.stringify(result),
+              mimeType: "text/plain",
             },
-          ];
-        } else {
+          ],
+        };
+      } else {
+        try {
           const result = await fetchPrd(url);
-          return result.screenshot
-            ? [
-                {
-                  type: "text",
-                  text: result.html,
-                  mimeType: "text/html",
-                },
-                {
-                  type: "image",
-                  data: result.screenshot.replace(
-                    /^data:image\/png;base64,/,
-                    ""
-                  ),
-                  mimeType: "image/png",
-                },
-              ]
-            : [
-                {
-                  type: "text",
-                  text: result.html,
-                  mimeType: "text/html",
-                },
-              ];
+          return {
+            ai_end: true, // 终止标记
+            content: result.screenshot
+              ? [
+                  {
+                    type: "text",
+                    text: result.html,
+                    mimeType: "text/html",
+                  },
+                  {
+                    type: "image",
+                    data: result.screenshot.replace(
+                      /^data:image\/png;base64,/,
+                      ""
+                    ),
+                    mimeType: "image/png",
+                  },
+                ]
+              : [
+                  {
+                    type: "text",
+                    text: result.html,
+                    mimeType: "text/html",
+                  },
+                ],
+          };
+        } catch (error) {
+          return {
+            ai_end: true, // 终止标记
+            content: [
+              {
+                type: "text",
+                text: "获取PRD内容失败：" + error,
+                mimeType: "text/plain",
+              },
+            ],
+          };
         }
-      } catch (error: unknown) {
-        console.error("smart_fetch_prd 执行失败:", error);
-        return [
-          {
-            type: "text",
-            text: `获取PRD内容失败：${error}`,
-            mimeType: "text/plain",
-          },
-        ];
       }
     }
   );
@@ -105,50 +111,24 @@ function registerTools(server: any) {
     }
   );
 
-  // 搜索PRD文档
+  // 获取指定项目全部版本列表
   server.tool(
-    "search_prd_documents",
-    "根据关键词搜索PRD文档，返回匹配的文档列表",
+    "fetch_project_versions",
+    "知道项目名的前提下，获取公司指定项目的全部版本号列表，返回 html 字符串页面内容",
     {
-      query: z.string().describe("搜索关键词，支持项目名、版本号、功能描述等"),
-      limit: z.number().optional().describe("返回结果数量限制，默认为20"),
+      project: z.string().describe("项目名称，如 yishou"),
     },
-    async ({ query, limit = 20 }: { query: string; limit?: number }) => {
-      try {
-        const results = await searchDocuments(query, limit);
-        return [
+    async ({ project }: { project: string }) => {
+      const result = await fetchProjectVersions(project);
+      return {
+        content: [
           {
             type: "text",
-            text: JSON.stringify(
-              {
-                query,
-                results: results.map((result) => ({
-                  title: result.title,
-                  project: result.project,
-                  version: result.version,
-                  url: result.url,
-                  summary: result.summary,
-                  relevance: result.relevance,
-                  matchType: result.matchType,
-                  matchedKeywords: result.matchedKeywords,
-                  pages: result.pages,
-                })),
-              },
-              null,
-              2
-            ),
-            mimeType: "application/json",
+            text: result.html,
+            mimeType: "text/html",
           },
-        ];
-      } catch (error) {
-        return [
-          {
-            type: "text",
-            text: `搜索失败: ${error}`,
-            mimeType: "text/plain",
-          },
-        ];
-      }
+        ],
+      };
     }
   );
 

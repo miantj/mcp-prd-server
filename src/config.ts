@@ -21,19 +21,29 @@ export const config = {
 };
 
 // 数据目录和文件路径
-export const dataDir = path.join(process.cwd(), "data");
+export const dataDir = path.resolve(process.cwd(), "data");
 export const projectListPath = path.join(dataDir, "project_list.json");
 export const projectVersionsPath = path.join(dataDir, "project_versions.json");
 
 // 确保数据目录存在
 if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
-  console.log(`数据目录已创建: ${dataDir}`);
+  try {
+    fs.mkdirSync(dataDir, { recursive: true });
+    console.log(`数据目录已创建: ${dataDir}`);
+  } catch (error) {
+    console.error(`创建数据目录失败: ${dataDir}`, error);
+    process.exit(1);
+  }
 }
 
 // 确保截图目录存在
 if (config.saveScreenshot) {
-  if (!fs.existsSync(config.screenshotDir)) {
-    fs.mkdirSync(config.screenshotDir, { recursive: true });
+  const screenshotDir = path.resolve(process.cwd(), config.screenshotDir);
+  if (!fs.existsSync(screenshotDir)) {
+    try {
+      fs.mkdirSync(screenshotDir, { recursive: true });
+    } catch (error) {
+      console.error(`创建截图目录失败: ${screenshotDir}`, error);
+    }
   }
 }

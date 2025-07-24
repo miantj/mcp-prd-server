@@ -83,7 +83,7 @@ class BrowserManager {
   async createPage(): Promise<puppeteer.Page> {
     const browser = await this.getBrowser();
     let page: puppeteer.Page | null = null;
-    
+
     try {
       page = await browser.newPage();
 
@@ -266,7 +266,10 @@ async function fetchPrd(
 
       return {
         html: htmlStr,
-        screenshot: screenshot as string, // 直接返回base64字符串，不添加data URL前缀
+        screenshot:
+          typeof screenshot === "string"
+            ? screenshot
+            : (screenshot as Buffer).toString("base64"),
       };
     } finally {
       await page.close();
@@ -498,9 +501,11 @@ async function fetchAndSaveAllPrd(options?: {
 
       // 限制并发数量，避免系统负载过高
       const concurrencyLimit = 3;
+      const timeoutMs = 30000; // 30秒超时
+
       for (let i = 0; i < versionNames.length; i += concurrencyLimit) {
         const batch = versionNames.slice(i, i + concurrencyLimit);
-        const batchResults = await Promise.all(
+        const batchResults = await Promise.allSettled(
           batch.map(async (version) => {
             const versionUrl = `http://192.168.1.244:7777/${project}/${version}/`;
             let versionContent = "";
@@ -533,70 +538,87 @@ async function fetchAndSaveAllPrd(options?: {
 
             if (shouldGetContent) {
               try {
-                // 参考 fetchHtmlWithContentImpl 方法，获取 document.js 并解析页面结构
-                const jsUrl = new URL("data/document.js", versionUrl).href;
-                const jsResp = await axios.get(jsUrl, {
-                  headers: {
-                    "User-Agent":
-                      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-                  },
-                });
-                const jsContent = jsResp.data;
-                const rootNodes = getCreatorResult(jsContent).sitemap.rootNodes;
-
-                // 递归获取所有页面URL（不获取页面内容）
-                async function fetchAllPages(nodes: any[]): Promise<any[]> {
-                  return Promise.all(
-                    nodes.map(async (node: any) => {
-                      if (node.type === "Folder" && node.children) {
-                        return {
-                          ...node,
-                          children: await fetchAllPages(node.children),
-                        };
-                      } else if (node.type === "Wireframe" && node.url) {
-                        // 拼接页面url
-                        const htmlUrl = new URL(node.url, versionUrl).href;
-                        return {
-                          ...node,
-                          fullUrl: htmlUrl,
-                        };
-                      } else {
-                        return node;
-                      }
-                    })
+                // 添加超时控制
+                const timeoutPromise = new Promise((_, reject) => {
+                  setTimeout(
+                    () => reject(new Error(`获取版本 ${version} 超时`)),
+                    timeoutMs
                   );
-                }
+                });
 
-                const pagesWithContent = await fetchAllPages(rootNodes);
+                const contentPromise = (async () => {
+                  // 参考 fetchHtmlWithContentImpl 方法，获取 document.js 并解析页面结构
+                  const jsUrl = new URL("data/document.js", versionUrl).href;
+                  const jsResp = await axios.get(jsUrl, {
+                    headers: {
+                      "User-Agent":
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                    },
+                  });
+                  const jsContent = jsResp.data;
+                  const rootNodes =
+                    getCreatorResult(jsContent).sitemap.rootNodes;
 
-                // 递归提取所有 Wireframe 页面
-                function extractWireframePages(nodes: any[]): any[] {
-                  const pages: any[] = [];
-                  for (const node of nodes) {
-                    if (node.type === "Wireframe" && node.fullUrl) {
-                      pages.push({
-                        name: node.pageName || node.name || "未命名页面",
-                        url: node.fullUrl,
-                      });
-                    } else if (node.type === "Folder" && node.children) {
-                      pages.push(...extractWireframePages(node.children));
-                    }
+                  // 递归获取所有页面URL（不获取页面内容）
+                  async function fetchAllPages(nodes: any[]): Promise<any[]> {
+                    return Promise.all(
+                      nodes.map(async (node: any) => {
+                        if (node.type === "Folder" && node.children) {
+                          return {
+                            ...node,
+                            children: await fetchAllPages(node.children),
+                          };
+                        } else if (node.type === "Wireframe" && node.url) {
+                          // 拼接页面url
+                          const htmlUrl = new URL(node.url, versionUrl).href;
+                          return {
+                            ...node,
+                            fullUrl: htmlUrl,
+                          };
+                        } else {
+                          return node;
+                        }
+                      })
+                    );
                   }
-                  return pages;
-                }
 
-                const wireframePages = extractWireframePages(pagesWithContent);
+                  const pagesWithContent = await fetchAllPages(rootNodes);
 
-                // 构建精简的版本内容信息
-                const versionInfo = {
-                  project: project,
-                  version: version,
-                  totalPages: wireframePages.length,
-                  pages: wireframePages,
-                  lastModified: versionTimeMap.get(version) || null,
-                };
+                  // 递归提取所有 Wireframe 页面
+                  function extractWireframePages(nodes: any[]): any[] {
+                    const pages: any[] = [];
+                    for (const node of nodes) {
+                      if (node.type === "Wireframe" && node.fullUrl) {
+                        pages.push({
+                          name: node.pageName || node.name || "未命名页面",
+                          url: node.fullUrl,
+                        });
+                      } else if (node.type === "Folder" && node.children) {
+                        pages.push(...extractWireframePages(node.children));
+                      }
+                    }
+                    return pages;
+                  }
 
-                versionContent = JSON.stringify(versionInfo, null, 2);
+                  const wireframePages =
+                    extractWireframePages(pagesWithContent);
+
+                  // 构建精简的版本内容信息
+                  const versionInfo = {
+                    project: project,
+                    version: version,
+                    totalPages: wireframePages.length,
+                    pages: wireframePages,
+                    lastModified: versionTimeMap.get(version) || null,
+                  };
+
+                  return JSON.stringify(versionInfo, null, 2);
+                })();
+
+                versionContent = (await Promise.race([
+                  contentPromise,
+                  timeoutPromise,
+                ])) as string;
               } catch (e: any) {
                 console.error(
                   `获取项目 ${project} 版本 ${version} document.js 失败：`
@@ -783,7 +805,29 @@ async function fetchAndSaveAllPrd(options?: {
             };
           })
         );
-        versionsWithContent.push(...batchResults);
+
+        // 处理Promise.allSettled的结果
+        const processedBatchResults = batchResults.map((result, index) => {
+          if (result.status === "fulfilled") {
+            return result.value;
+          } else {
+            console.error(
+              `版本 ${versionNames[i + index]} 处理失败:`,
+              result.reason
+            );
+            return {
+              name: versionNames[i + index],
+              url: `http://192.168.1.244:7777/${project}/${
+                versionNames[i + index]
+              }/`,
+              content: `处理失败: ${result.reason?.message || "未知错误"}`,
+              lastModified: versionTimeMap.get(versionNames[i + index]) || null,
+              pages: [],
+            };
+          }
+        });
+
+        versionsWithContent.push(...processedBatchResults);
 
         // 添加进度日志
         console.log(
@@ -942,6 +986,10 @@ class DocumentIndexManager {
       let processedCount = 0;
       const totalCount = Object.values(projectVersions).flat().length;
 
+      // 内存管理：限制同时处理的文档数量
+      const maxConcurrentDocs = 100;
+      let currentBatch: DocumentIndex[] = [];
+
       // 计算一个月前的时间戳
       const oneMonthAgo = new Date();
       oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
@@ -981,10 +1029,22 @@ class DocumentIndexManager {
               pages: version.pages,
             };
 
-            indexes.push(index);
+            currentBatch.push(index);
             this.indexes.set(`${project}-${version.name}`, index);
 
             processedCount++;
+
+            // 当批次达到最大数量时，保存并清空
+            if (currentBatch.length >= maxConcurrentDocs) {
+              indexes.push(...currentBatch);
+              currentBatch = [];
+
+              // 强制垃圾回收（如果可用）
+              if (global.gc) {
+                global.gc();
+              }
+            }
+
             if (processedCount % 100 === 0) {
               console.log(`已处理 ${processedCount}/${totalCount} 个文档`);
             }
@@ -992,6 +1052,11 @@ class DocumentIndexManager {
             console.error(`处理文档 ${project}/${version.name} 时出错:`, error);
           }
         }
+      }
+
+      // 保存剩余的批次
+      if (currentBatch.length > 0) {
+        indexes.push(...currentBatch);
       }
 
       // 保存索引到文件
@@ -1028,7 +1093,7 @@ class DocumentIndexManager {
               const pageName = page.toLowerCase();
               keywords.add(pageName);
               // 提取中文词组
-              this.extractChinesePhrases(pageName).forEach(phrase => {
+              this.extractChinesePhrases(pageName).forEach((phrase) => {
                 keywords.add(phrase);
               });
             } else if (page.name) {
@@ -1036,7 +1101,7 @@ class DocumentIndexManager {
               const pageName = page.name.toLowerCase();
               keywords.add(pageName);
               // 提取中文词组
-              this.extractChinesePhrases(pageName).forEach(phrase => {
+              this.extractChinesePhrases(pageName).forEach((phrase) => {
                 keywords.add(phrase);
               });
             }
@@ -1098,7 +1163,7 @@ class DocumentIndexManager {
           const pageName = page.name.toLowerCase();
           keywords.add(pageName);
           // 提取中文词组
-          this.extractChinesePhrases(pageName).forEach(phrase => {
+          this.extractChinesePhrases(pageName).forEach((phrase) => {
             keywords.add(phrase);
           });
         }
@@ -1112,7 +1177,7 @@ class DocumentIndexManager {
   private extractChinesePhrases(text: string): string[] {
     const phrases: string[] = [];
     const chineseWords = text.match(/[\u4e00-\u9fa5]+/g) || [];
-    
+
     for (const word of chineseWords) {
       if (word.length >= 2) {
         phrases.push(word);
@@ -1129,7 +1194,7 @@ class DocumentIndexManager {
         }
       }
     }
-    
+
     return phrases;
   }
 
@@ -1249,19 +1314,25 @@ class DocumentIndexManager {
         for (const page of index.pages) {
           if (page.name) {
             const pageName = page.name.toLowerCase();
-            
+
             // 完整页面名称匹配
-            if (pageName.includes(lowerQuery) || lowerQuery.includes(pageName)) {
+            if (
+              pageName.includes(lowerQuery) ||
+              lowerQuery.includes(pageName)
+            ) {
               relevance += 12;
               if (matchType === "fuzzy") matchType = "keyword";
               if (!matchedKeywords.includes(pageName)) {
                 matchedKeywords.push(pageName);
               }
             }
-            
+
             // 页面名称中的关键词匹配
             for (const queryWord of queryWords) {
-              if (pageName.includes(queryWord) || queryWord.includes(pageName)) {
+              if (
+                pageName.includes(queryWord) ||
+                queryWord.includes(pageName)
+              ) {
                 relevance += 8;
                 if (matchType === "fuzzy") matchType = "keyword";
                 if (!matchedKeywords.includes(queryWord)) {
@@ -1283,7 +1354,7 @@ class DocumentIndexManager {
             matchedKeywords.push(keyword);
           }
         }
-        
+
         // 关键词中的单词匹配
         for (const queryWord of queryWords) {
           if (keyword.includes(queryWord) || queryWord.includes(keyword)) {
@@ -1319,7 +1390,8 @@ class DocumentIndexManager {
         // 对于中文查询，尝试更宽松的匹配
         const chineseWords = lowerQuery.match(/[\u4e00-\u9fa5]+/g) || [];
         for (const chineseWord of chineseWords) {
-          if (chineseWord.length >= 2) { // 至少2个中文字符
+          if (chineseWord.length >= 2) {
+            // 至少2个中文字符
             // 在标题中查找
             if (index.title.toLowerCase().includes(chineseWord)) {
               relevance += 4;
@@ -1327,11 +1399,14 @@ class DocumentIndexManager {
                 matchedKeywords.push(chineseWord);
               }
             }
-            
+
             // 在页面名称中查找
             if (index.pages && Array.isArray(index.pages)) {
               for (const page of index.pages) {
-                if (page.name && page.name.toLowerCase().includes(chineseWord)) {
+                if (
+                  page.name &&
+                  page.name.toLowerCase().includes(chineseWord)
+                ) {
                   relevance += 6;
                   if (!matchedKeywords.includes(chineseWord)) {
                     matchedKeywords.push(chineseWord);
@@ -1339,7 +1414,7 @@ class DocumentIndexManager {
                 }
               }
             }
-            
+
             // 在关键词中查找
             for (const keyword of index.keywords) {
               if (keyword.includes(chineseWord)) {
@@ -1374,14 +1449,20 @@ class DocumentIndexManager {
 }
 
 // 搜索文档函数
-async function searchDocuments(
-  query: string,
-  limit: number = 20
-): Promise<SearchResult[]> {
+async function searchDocuments(query: string): Promise<SearchResult[]> {
   const indexManager = DocumentIndexManager.getInstance();
   await indexManager.loadIndexes();
+
+  // 检查索引是否为空，如果为空则构建索引
+  if (indexManager.getAllIndexes().length === 0) {
+    console.log("未找到文档索引，开始构建索引...");
+    await buildDocumentIndex();
+    // 重新加载新构建的索引
+    await indexManager.loadIndexes();
+  }
+
   const results = indexManager.searchByKeywords(query);
-  return results.slice(0, limit);
+  return results.slice(0, 10);
 }
 
 // 构建文档索引
