@@ -131,8 +131,25 @@ function registerTools(server: any) {
         content: [
           {
             type: "text",
-            text: JSON.stringify(result),
-            mimeType: "text/plain",
+            text: JSON.stringify(
+              {
+                query,
+                results: result.map((result) => ({
+                  title: result.title,
+                  project: result.project,
+                  version: result.version,
+                  url: result.url,
+                  summary: result.summary,
+                  relevance: result.relevance,
+                  matchType: result.matchType,
+                  matchedKeywords: result.matchedKeywords,
+                  pages: result.pages,
+                })),
+              },
+              null,
+              2
+            ),
+            mimeType: "application/json",
           },
           {
             type: "text",
