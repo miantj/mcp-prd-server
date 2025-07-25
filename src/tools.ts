@@ -5,7 +5,7 @@ import {
   fetchPrd,
   fetchHtmlWithContentImpl,
   fetchProjectVersions,
-  buildDocumentIndex,
+  searchDocuments,
   fetchAndSaveAllPrd,
 } from "./handlers.js";
 import { projectNameMap } from "./config.js";
@@ -89,7 +89,7 @@ function registerTools(server: any) {
     }
   );
 
-  // 更新所有项目的PRD文档
+  // // 更新所有项目的PRD文档
   server.tool(
     "fetch_all_prd",
     "更新所有项目的PRD文档,必须用户强调更新,否则默认不执行",
@@ -100,47 +100,13 @@ function registerTools(server: any) {
         .describe("加载最近几个月的文档，默认1个月"),
     },
     async ({ monthsToLoad }: { monthsToLoad?: number }) => {
-      try {
-        await fetchAndSaveAllPrd({ monthsToLoad });
-        return [
-          {
-            type: "text",
-            text: "成功更新所有项目的PRD文档",
-            mimeType: "text/plain",
-          },
-          {
-            type: "text",
-            text: JSON.stringify({ projectNameMap }, null, 2),
-            mimeType: "application/json",
-          },
-        ];
-      } catch (error) {
-        return [
-          {
-            type: "text",
-            text: `更新PRD文档失败: ${error}`,
-            mimeType: "text/plain",
-          },
-        ];
-      }
-    }
-  );
-
-  // 获取指定项目全部版本列表
-  server.tool(
-    "fetch_project_versions",
-    "知道项目名的前提下，获取公司指定项目的全部版本号列表，返回 html 字符串页面内容",
-    {
-      project: z.string().describe("项目名称，如 yishou"),
-    },
-    async ({ project }: { project: string }) => {
-      const result = await fetchProjectVersions(project);
+      await fetchAndSaveAllPrd({ monthsToLoad });
       return {
         content: [
           {
             type: "text",
-            text: result.html,
-            mimeType: "text/html",
+            text: "PRD文档数据更新成功",
+            mimeType: "text/plain",
           },
           {
             type: "text",
@@ -152,30 +118,29 @@ function registerTools(server: any) {
     }
   );
 
-  // 构建文档索引
+  // // 搜索项目文档
   server.tool(
-    "build_document_index",
-    "重新从现有项目版本数据构建文档索引，用于支持智能搜索功能，默认已经构建了文档索引，如果不需要智能搜索，则不需要调用",
-    {},
-    async () => {
-      try {
-        await buildDocumentIndex();
-        return [
+    "search_documents",
+    "搜索文档内容，支持智能匹配和关键词搜索",
+    {
+      query: z.string().describe("搜索关键词，如 yishou"),
+    },
+    async ({ query }: { query: string }) => {
+      const result = await searchDocuments(query);
+      return {
+        content: [
           {
             type: "text",
-            text: "文档索引构建完成",
+            text: JSON.stringify(result),
             mimeType: "text/plain",
           },
-        ];
-      } catch (error) {
-        return [
           {
             type: "text",
-            text: `构建索引失败: ${error}`,
-            mimeType: "text/plain",
+            text: JSON.stringify({ projectNameMap }, null, 2),
+            mimeType: "application/json",
           },
-        ];
-      }
+        ],
+      };
     }
   );
 }
