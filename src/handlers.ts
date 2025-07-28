@@ -97,7 +97,7 @@ class BrowserManager {
         const url = req.url();
 
         // 只拦截一些不必要的资源，保留样式表以确保页面正确渲染
-        if (["image", "font", "media"].includes(resourceType)) {
+        if (["font", "media"].includes(resourceType)) {
           // 对于图片、字体和媒体文件，只拦截外部资源，保留本地资源
           if (url.startsWith("http") && !url.includes("192.168.1.244")) {
             req.abort();
@@ -245,6 +245,8 @@ async function fetchPrd(
         encoding: "base64",
         fullPage: true,
         type: "png",
+        // 添加截图质量优化选项
+        omitBackground: true, // 如果页面背景是透明的，则保持透明
       });
 
       // 如果开启了保存截图功能，保存图片到本地

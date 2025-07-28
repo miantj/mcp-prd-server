@@ -8,7 +8,7 @@ import {
   searchDocuments,
   fetchAndSaveAllPrd,
 } from "./handlers.js";
-import { projectNameMap } from "./config.js";
+import { projectNameMap, rules } from "./config.js";
 
 // registerTools: 统一注册所有server.tool
 function registerTools(server: any) {
@@ -21,7 +21,7 @@ function registerTools(server: any) {
       prompt: z.string().describe("用户需求描述或提示词"),
     },
     async ({ url, prompt }: { url: string; prompt: string }) => {
-      const keywords = ["全部", "所有", "整体"];
+      const keywords = ["全部需求", "所有需求"];
       const useAll = keywords.some((k) => prompt.includes(k));
       if (useAll) {
         const result = await fetchHtmlWithContentImpl(url);
@@ -46,6 +46,11 @@ function registerTools(server: any) {
             content: [
               ...(result.screenshot
                 ? [
+                    {
+                      type: "text",
+                      text: rules.rule,
+                      mimeType: "text/plain",
+                    },
                     {
                       type: "text",
                       text: result.html,
