@@ -29,12 +29,17 @@ function registerTools(server: any) {
           content: [
             {
               type: "text",
-              text: JSON.stringify(result),
+              text: rules.beforeCode,
               mimeType: "text/plain",
             },
             {
               type: "text",
-              text: JSON.stringify({ projectNameMap }, null, 2),
+              text: JSON.stringify(result, null, 2),
+              mimeType: "application/json",
+            },
+            {
+              type: "text",
+              text: JSON.stringify(projectNameMap, null, 2),
               mimeType: "application/json",
             },
           ],
@@ -44,13 +49,13 @@ function registerTools(server: any) {
           const result = await fetchPrd(url);
           return {
             content: [
+              {
+                type: "text",
+                text: rules.beforeCode,
+                mimeType: "text/plain",
+              },
               ...(result.screenshot
                 ? [
-                    {
-                      type: "text",
-                      text: rules.rule,
-                      mimeType: "text/plain",
-                    },
                     {
                       type: "text",
                       text: result.html,
@@ -74,7 +79,7 @@ function registerTools(server: any) {
                   ]),
               {
                 type: "text",
-                text: JSON.stringify({ projectNameMap }, null, 2),
+                text: JSON.stringify({ projectNameMap }),
                 mimeType: "application/json",
               },
             ],

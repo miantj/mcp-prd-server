@@ -6,7 +6,7 @@ import fs from "fs";
 import path from "path";
 import { config, projectListPath, projectVersionsPath } from "./config.js";
 import { registerTools } from "./tools.js";
-import { fetchPrd, fetchAndSaveAllPrd, cleanupBrowser, buildDocumentIndex } from "./handlers.js";
+import { fetchHtmlWithContentImpl, fetchAndSaveAllPrd, cleanupBrowser, buildDocumentIndex } from "./handlers.js";
 async function main() {
     try {
         // 读取项目和版本数据前，判断文件是否存在，不存在则自动生成
@@ -35,7 +35,7 @@ async function main() {
         // 本地调试时直接调用 node build/index.js
         if (config.saveScreenshot) {
             (async () => {
-                const result = await fetchPrd(config.url);
+                const result = await fetchHtmlWithContentImpl(config.url);
                 // const result = await fetchAndSaveAllPrd({
                 //   monthsToLoad: 1, // 默认加载最近1个月的文档
                 // });

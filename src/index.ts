@@ -7,7 +7,7 @@ import fs from "fs";
 import path from "path";
 import { config, projectListPath, projectVersionsPath } from "./config.js";
 import { registerTools } from "./tools.js";
-import { fetchPrd, fetchAndSaveAllPrd, cleanupBrowser, buildDocumentIndex } from "./handlers.js";
+import { fetchHtmlWithContentImpl, fetchAndSaveAllPrd, cleanupBrowser, buildDocumentIndex } from "./handlers.js";
 
 async function main() {
   try {
@@ -44,7 +44,7 @@ async function main() {
     // 本地调试时直接调用 node build/index.js
     if (config.saveScreenshot) {
       (async () => {
-        const result = await fetchPrd(config.url);
+        const result = await fetchHtmlWithContentImpl(config.url);
         // const result = await fetchAndSaveAllPrd({
         //   monthsToLoad: 1, // 默认加载最近1个月的文档
         // });
