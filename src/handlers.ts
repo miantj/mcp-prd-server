@@ -32,7 +32,16 @@ class BrowserManager {
 
   async getBrowser(): Promise<puppeteer.Browser> {
     if (this.browser) {
-      return this.browser;
+      try {
+        // 简单检查浏览器是否仍然连接
+        await this.browser.pages();
+        return this.browser;
+      } catch (error) {
+        console.log("浏览器连接已断开，重新启动...");
+        this.browser = null;
+        this.isInitializing = false;
+        this.initPromise = null;
+      }
     }
 
     if (this.isInitializing) {
@@ -104,9 +113,6 @@ class BrowserManager {
           } else {
             req.continue();
           }
-        } else if (resourceType === "stylesheet") {
-          // 保留样式表以确保页面正确渲染
-          req.continue();
         } else {
           req.continue();
         }
@@ -222,62 +228,77 @@ async function fetchPrd(
     }
   }
   console.log("processedUrl", processedUrl);
+  
+  let page: puppeteer.Page | null = null;
   try {
     const response = await axios.get(processedUrl, {
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
       },
+      timeout: 15000,
     });
     const htmlStr = htmlReduce(response.data);
     console.log("htmlStr", htmlStr);
+    
     // 获取页面截图
     const browserManager = BrowserManager.getInstance();
-    const page = await browserManager.createPage();
-    try {
-      await page.goto(processedUrl, {
-        waitUntil: "networkidle0", // 等待网络空闲，确保页面完全加载
-        timeout: 10000, // 增加超时时间到30秒
-      });
+    page = await browserManager.createPage();
+    
+    await page.goto(processedUrl, {
+      waitUntil: "networkidle0",
+      timeout: 15000,
+    });
 
-      // 直接获取base64截图数据
-      const screenshot = await page.screenshot({
-        encoding: "base64",
-        fullPage: true,
-        type: "png",
-        // 添加截图质量优化选项
-        omitBackground: true, // 如果页面背景是透明的，则保持透明
-      });
+    const screenshot = await page.screenshot({
+      encoding: "base64",
+      fullPage: true,
+      type: "png",
+      omitBackground: true,// 如果页面背景是透明的，则保持透明
+    });
 
-      // 如果开启了保存截图功能，保存图片到本地
-      if (config.saveScreenshot) {
-        const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-        const urlHash = Buffer.from(url).toString("base64").substring(0, 10);
-        const filename = `screenshot-${timestamp}-${urlHash}.png`;
-        const filepath = path.join(config.screenshotDir, filename);
-        await fs.promises.writeFile(
-          filepath,
-          Buffer.from(screenshot, "base64")
-        );
-        console.log(`Screenshot saved to: ${filepath}`);
-      }
-
-      return {
-        html: htmlStr,
-        screenshot:
-          typeof screenshot === "string"
-            ? screenshot
-            : (screenshot as Buffer).toString("base64"),
-      };
-    } finally {
-      await page.close();
+    // 如果开启了保存截图功能，保存图片到本地
+    if (config.saveScreenshot) {
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const urlHash = Buffer.from(url).toString("base64").substring(0, 10);
+      const filename = `screenshot-${timestamp}-${urlHash}.png`;
+      const filepath = path.join(config.screenshotDir, filename);
+      await fs.promises.writeFile(
+        filepath,
+        Buffer.from(screenshot, "base64")
+      );
+      console.log(`Screenshot saved to: ${filepath}`);
     }
+
+    return {
+      html: htmlStr,
+      screenshot:
+        typeof screenshot === "string"
+          ? screenshot
+          : (screenshot as Buffer).toString("base64"),
+    };
   } catch (error: any) {
     console.error("获取PRD内容失败:", error);
+    
+    // 如果是连接错误，尝试重新初始化浏览器
+    if (error.message && error.message.includes("Protocol error: Connection closed")) {
+      console.log("检测到浏览器连接错误，尝试重新初始化...");
+      const browserManager = BrowserManager.getInstance();
+      await browserManager.closeBrowser();
+    }
+    
     return {
       html: "获取PRD内容失败：" + (error.message || error),
       screenshot: "",
     };
+  } finally {
+    if (page) {
+      try {
+        await page.close();
+      } catch (closeError) {
+        console.error("关闭页面时出错:", closeError);
+      }
+    }
   }
 }
 

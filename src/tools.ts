@@ -23,29 +23,30 @@ function registerTools(server: any) {
     async ({ url, prompt }: { url: string; prompt: string }) => {
       const keywords = ["全部需求", "所有需求"];
       const useAll = keywords.some((k) => prompt.includes(k));
-      if (useAll) {
-        const result = await fetchHtmlWithContentImpl(url);
-        return {
-          content: [
-            {
-              type: "text",
-              text: rules.beforeCode,
-              mimeType: "text/plain",
-            },
-            {
-              type: "text",
-              text: JSON.stringify(result, null, 2),
-              mimeType: "application/json",
-            },
-            {
-              type: "text",
-              text: JSON.stringify(projectNameMap, null, 2),
-              mimeType: "application/json",
-            },
-          ],
-        };
-      } else {
-        try {
+      
+      try {
+        if (useAll) {
+          const result = await fetchHtmlWithContentImpl(url);
+          return {
+            content: [
+              {
+                type: "text",
+                text: rules.beforeCode,
+                mimeType: "text/plain",
+              },
+              {
+                type: "text",
+                text: JSON.stringify(result, null, 2),
+                mimeType: "application/json",
+              },
+              {
+                type: "text",
+                text: JSON.stringify(projectNameMap, null, 2),
+                mimeType: "application/json",
+              },
+            ],
+          };
+        } else {
           const result = await fetchPrd(url);
           return {
             content: [
@@ -84,17 +85,23 @@ function registerTools(server: any) {
               },
             ],
           };
-        } catch (error) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: "获取PRD内容失败：" + error,
-                mimeType: "text/plain",
-              },
-            ],
-          };
         }
+      } catch (error: any) {
+        console.error("smart_fetch_prd 工具执行失败:", error);
+        return {
+          content: [
+            {
+              type: "text",
+              text: "获取PRD内容失败：" + (error.message || error),
+              mimeType: "text/plain",
+            },
+            {
+              type: "text",
+              text: JSON.stringify({ projectNameMap }),
+              mimeType: "application/json",
+            },
+          ],
+        };
       }
     }
   );
