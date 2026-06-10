@@ -3,8 +3,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import fs from "fs";
-import path from "path";
-import { config, projectListPath, projectVersionsPath } from "./config.js";
+import { config, documentIndexPath, projectListPath, projectVersionsPath } from "./config.js";
 import { registerTools } from "./tools.js";
 import { fetchHtmlWithContentImpl, fetchAndSaveAllPrd, cleanupBrowser, buildDocumentIndex } from "./handlers.js";
 async function main() {
@@ -15,7 +14,6 @@ async function main() {
             await fetchAndSaveAllPrd();
         }
         // 构建文档索引（如果不存在）
-        const documentIndexPath = path.join(process.cwd(), "data", "document_index.json");
         if (!fs.existsSync(documentIndexPath)) {
             console.error("文档索引文件不存在，正在构建索引...");
             await buildDocumentIndex();

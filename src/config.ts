@@ -1,6 +1,7 @@
 // config.ts
 import path from "path";
 import fs from "fs";
+import { fileURLToPath } from "url";
 
 // 项目名称映射表
 export const projectNameMap = {
@@ -21,9 +22,14 @@ export const config = {
 };
 
 // 数据目录和文件路径
-export const dataDir = path.resolve(process.cwd(), "data");
+export const serverRootDir = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  ".."
+);
+export const dataDir = path.join(serverRootDir, "data");
 export const projectListPath = path.join(dataDir, "project_list.json");
 export const projectVersionsPath = path.join(dataDir, "project_versions.json");
+export const documentIndexPath = path.join(dataDir, "document_index.json");
 
 // 确保数据目录存在
 if (!fs.existsSync(dataDir)) {

@@ -4,7 +4,13 @@ import axios from "axios";
 import puppeteer from "puppeteer";
 import fs from "fs";
 import path from "path";
-import { projectNameMap, config } from "./config.js";
+import {
+  projectNameMap,
+  config,
+  dataDir,
+  documentIndexPath,
+  projectVersionsPath,
+} from "./config.js";
 import {
   projectList,
   isValidProject,
@@ -13,6 +19,32 @@ import {
   htmlReduce,
   getCreatorResult,
 } from "./utils.js";
+
+const systemChromePaths = [
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+  "/usr/bin/google-chrome-stable",
+  "/usr/bin/google-chrome",
+  "/usr/bin/chromium-browser",
+  "/usr/bin/chromium",
+];
+
+function resolveChromeExecutablePath(): string | undefined {
+  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+    return process.env.PUPPETEER_EXECUTABLE_PATH;
+  }
+
+  try {
+    const puppeteerExecutablePath = puppeteer.executablePath();
+    if (fs.existsSync(puppeteerExecutablePath)) {
+      return puppeteerExecutablePath;
+    }
+  } catch {
+    // Puppeteer can throw before the browser is installed; fall back below.
+  }
+
+  return systemChromePaths.find((chromePath) => fs.existsSync(chromePath));
+}
 
 // 浏览器实例管理器
 class BrowserManager {
@@ -49,8 +81,10 @@ class BrowserManager {
     }
 
     this.isInitializing = true;
+    const executablePath = resolveChromeExecutablePath();
     this.initPromise = puppeteer.launch({
       headless: true,
+      ...(executablePath ? { executablePath } : {}),
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -450,7 +484,6 @@ async function fetchAndSaveAllPrd(options?: {
   console.log(`获取所有项目：${projectNames.join(", ")}`);
 
   // 3. 保存为 JSON 文件
-  const dataDir = path.join(process.cwd(), "data");
   if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true });
   }
@@ -964,11 +997,7 @@ class DocumentIndexManager {
   private indexFilePath: string;
 
   private constructor() {
-    this.indexFilePath = path.join(
-      process.cwd(),
-      "data",
-      "document_index.json"
-    );
+    this.indexFilePath = documentIndexPath;
   }
 
   static getInstance(): DocumentIndexManager {
@@ -984,11 +1013,6 @@ class DocumentIndexManager {
 
     try {
       // 读取现有的项目版本数据
-      const projectVersionsPath = path.join(
-        process.cwd(),
-        "data",
-        "project_versions.json"
-      );
       if (!fs.existsSync(projectVersionsPath)) {
         console.error("项目版本数据文件不存在");
         return;
@@ -1264,7 +1288,6 @@ class DocumentIndexManager {
 
   // 保存索引到文件
   private async saveIndexes(indexes: DocumentIndex[]): Promise<void> {
-    const dataDir = path.join(process.cwd(), "data");
     if (!fs.existsSync(dataDir)) {
       fs.mkdirSync(dataDir, { recursive: true });
     }
