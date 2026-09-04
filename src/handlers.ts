@@ -10,6 +10,7 @@ import {
   dataDir,
   documentIndexPath,
   projectVersionsPath,
+  serverRootDir,
 } from "./config.js";
 import {
   projectList,
@@ -18,6 +19,7 @@ import {
   isValidVersion,
   htmlReduce,
   getCreatorResult,
+  resolveAxurePageUrl,
 } from "./utils.js";
 
 const systemChromePaths = [
@@ -142,7 +144,7 @@ class BrowserManager {
         // 只拦截一些不必要的资源，保留样式表以确保页面正确渲染
         if (["font", "media"].includes(resourceType)) {
           // 对于图片、字体和媒体文件，只拦截外部资源，保留本地资源
-          if (url.startsWith("http") && !url.includes("192.168.1.244")) {
+          if (url.startsWith("http") && !url.includes(config.prdHost)) {
             req.abort();
           } else {
             req.continue();
@@ -247,23 +249,42 @@ async function isProjectVersions(
   console.log("version", version);
 }
 
+/** 等待 Axure 线框正文出现（避免截到空壳/未渲染页） */
+async function waitForAxureContent(page: puppeteer.Page): Promise<void> {
+  try {
+    await page.waitForFunction(
+      () => {
+        const text = (document.body?.innerText || "").replace(/\s+/g, " ").trim();
+        // 播放器壳页几乎只有 CLOSE / Share Prototype；线框页会有中文或业务文案
+        const shellOnly =
+          text.length < 40 &&
+          /CLOSE|Share Prototype|Local Preview/i.test(text) &&
+          !/[\u4e00-\u9fa5]/.test(text);
+        if (shellOnly) return false;
+        const hasWidget = !!document.querySelector(
+          "#base, .ax_default, [data-label], img"
+        );
+        return hasWidget || text.length > 30;
+      },
+      { timeout: 15000 }
+    );
+  } catch {
+    // 超时仍继续截图，避免整页失败
+  }
+  // 图片/字体再等一拍
+  await new Promise((resolve) => setTimeout(resolve, 800));
+}
+
 // 获取当前页面内容
 async function fetchPrd(
   url: string
-): Promise<{ html: string; screenshot: string }> {
-  let processedUrl = url;
-  let pageName = "";
-  if (url.includes("#")) {
-    const baseUrl = url.split("#")[0];
-    const params = new URLSearchParams(url.split("#")[1]);
-    pageName = params.get("p") || "";
-    if (pageName) {
-      processedUrl = `${baseUrl}${pageName}.html`;
-    }
-  }
+): Promise<{ html: string; screenshot: string; screenshotPath: string }> {
+  // 关键：只解析 #p=，新版分享链是 ?p=，会落到空 iframe 壳页 → 黑图
+  const processedUrl = resolveAxurePageUrl(url);
   console.log("processedUrl", processedUrl);
-  
+
   let page: puppeteer.Page | null = null;
+  let htmlStr = "";
   try {
     const response = await axios.get(processedUrl, {
       headers: {
@@ -272,58 +293,105 @@ async function fetchPrd(
       },
       timeout: 15000,
     });
-    const htmlStr = htmlReduce(response.data);
+    htmlStr = htmlReduce(response.data);
     console.log("htmlStr", htmlStr);
-    
-    // 获取页面截图
-    const browserManager = BrowserManager.getInstance();
-    page = await browserManager.createPage();
-    
-    await page.goto(processedUrl, {
-      waitUntil: "networkidle0",
-      timeout: 15000,
-    });
 
-    const screenshot = await page.screenshot({
-      encoding: "base64",
-      fullPage: true,
-      type: "png",
-      omitBackground: true,// 如果页面背景是透明的，则保持透明
-    });
+    // 截图失败不阻断 HTML 返回：Axure 常有常驻连接，networkidle0 易超时
+    let screenshotBase64 = "";
+    let screenshotPath = "";
+    try {
+      const browserManager = BrowserManager.getInstance();
+      page = await browserManager.createPage();
 
-    // 如果开启了保存截图功能，保存图片到本地
-    if (config.saveScreenshot) {
-      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const urlHash = Buffer.from(url).toString("base64").substring(0, 10);
-      const filename = `screenshot-${timestamp}-${urlHash}.png`;
-      const filepath = path.join(config.screenshotDir, filename);
-      await fs.promises.writeFile(
-        filepath,
-        Buffer.from(screenshot, "base64")
-      );
-      console.log(`Screenshot saved to: ${filepath}`);
+      // Axure 原型常保持 1～2 条连接，networkidle0 几乎必超时；networkidle2 实测可用
+      await page.goto(processedUrl, {
+        waitUntil: "networkidle2",
+        timeout: 30000,
+      });
+      await waitForAxureContent(page);
+
+      // 透明背景在深色 IDE 里会被看成黑图；强制白底
+      await page.evaluate(() => {
+        document.documentElement.style.background = "#ffffff";
+        if (document.body) document.body.style.background = "#ffffff";
+      });
+
+      const screenshot = await page.screenshot({
+        encoding: "base64",
+        fullPage: true,
+        type: "png",
+        omitBackground: false,
+      });
+      screenshotBase64 =
+        typeof screenshot === "string"
+          ? screenshot
+          : (screenshot as Buffer).toString("base64");
+
+      // 线框页静态 HTML 常几乎无文案，补一段渲染后正文供 Agent 读
+      try {
+        const renderedText = await page.evaluate(() =>
+          (document.body?.innerText || "").replace(/\s+/g, "\n").trim()
+        );
+        if (renderedText && renderedText.length > 20) {
+          htmlStr = `${htmlStr}\n<!-- axure-rendered-text -->\n${renderedText}`;
+        }
+      } catch {
+        // ignore
+      }
+
+      // 落盘：Cursor 将大 MCP 结果写入 agent-tools/*.txt 时会丢掉 image 块，路径写在文本里可被 Read 读回
+      if (config.saveScreenshot) {
+        const dir = path.isAbsolute(config.screenshotDir)
+          ? config.screenshotDir
+          : path.join(serverRootDir, config.screenshotDir);
+        if (!fs.existsSync(dir)) {
+          fs.mkdirSync(dir, { recursive: true });
+        }
+        const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+        const urlHash = Buffer.from(url).toString("base64").substring(0, 10);
+        const filename = `screenshot-${timestamp}-${urlHash}.png`;
+        screenshotPath = path.join(dir, filename);
+        await fs.promises.writeFile(
+          screenshotPath,
+          Buffer.from(screenshotBase64, "base64")
+        );
+        console.log(`Screenshot saved to: ${screenshotPath}`);
+      }
+    } catch (screenshotError: any) {
+      console.error("PRD 截图失败（HTML 仍返回）:", screenshotError);
+      if (
+        screenshotError?.message &&
+        screenshotError.message.includes("Protocol error: Connection closed")
+      ) {
+        console.log("检测到浏览器连接错误，尝试重新初始化...");
+        const browserManager = BrowserManager.getInstance();
+        await browserManager.closeBrowser();
+      }
     }
 
     return {
       html: htmlStr,
-      screenshot:
-        typeof screenshot === "string"
-          ? screenshot
-          : (screenshot as Buffer).toString("base64"),
+      screenshot: screenshotBase64,
+      screenshotPath,
     };
   } catch (error: any) {
     console.error("获取PRD内容失败:", error);
-    
+
     // 如果是连接错误，尝试重新初始化浏览器
-    if (error.message && error.message.includes("Protocol error: Connection closed")) {
+    if (
+      error.message &&
+      error.message.includes("Protocol error: Connection closed")
+    ) {
       console.log("检测到浏览器连接错误，尝试重新初始化...");
       const browserManager = BrowserManager.getInstance();
       await browserManager.closeBrowser();
     }
-    
+
     return {
-      html: "获取PRD内容失败：" + (error.message || error),
+      // axios 已成功时优先返回 HTML，避免截图/导航问题吞掉正文
+      html: htmlStr || "获取PRD内容失败：" + (error.message || error),
       screenshot: "",
+      screenshotPath: "",
     };
   } finally {
     if (page) {
@@ -338,15 +406,19 @@ async function fetchPrd(
 
 // 1. 获取全部页面内容，并返回树形结构
 async function fetchHtmlWithContentImpl(url: string): Promise<any> {
-  // 处理URL格式
-  let processedUrl = url;
-  if (url.includes("#")) {
-    const baseUrl = url.split("#")[0];
-    const params = new URLSearchParams(url.split("#")[1]);
-    const pageName = params.get("p");
-    if (pageName) {
-      processedUrl = `${baseUrl}${pageName}.html`;
+  // document.js 相对版本目录；resolve 到线框页后再取目录
+  const pageUrl = resolveAxurePageUrl(url);
+  let processedUrl = pageUrl;
+  try {
+    const u = new URL(pageUrl);
+    if (/\.html?$/i.test(u.pathname)) {
+      u.pathname = u.pathname.replace(/[^/]+$/, "");
+      u.search = "";
+      u.hash = "";
+      processedUrl = u.href;
     }
+  } catch {
+    // keep pageUrl
   }
   try {
     // 1. 获取 document.js
@@ -386,6 +458,9 @@ async function fetchHtmlWithContentImpl(url: string): Promise<any> {
             return {
               ...node,
               content: htmlContent,
+              ...(node.children
+                ? { children: await fetchTree(node.children) }
+                : {}),
             };
           } else {
             return node;
@@ -400,7 +475,87 @@ async function fetchHtmlWithContentImpl(url: string): Promise<any> {
   }
 }
 
-// 新增：爬取 http://192.168.1.244:7777/{project}/ 下全部版本页面内容（只返回 html，不递归）
+const PRD_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
+
+type PrdFileRecord = {
+  project_name: string;
+  path_name: string;
+  create_time: string;
+  prd_link: string;
+};
+
+// 从公网列表接口拉取 PRD 记录（按创建时间倒序）；monthsToLoad>0 时提前停
+async function fetchPrdFileRecords(options?: {
+  projectName?: string;
+  monthsToLoad?: number;
+}): Promise<PrdFileRecord[]> {
+  const { projectName, monthsToLoad = 0 } = options || {};
+  const pageSize = 100;
+  const all: PrdFileRecord[] = [];
+  let page = 1;
+  const monthsAgo = new Date();
+  if (monthsToLoad > 0) {
+    monthsAgo.setMonth(monthsAgo.getMonth() - monthsToLoad);
+  }
+
+  while (true) {
+    const res = await axios.get(config.prdListApi, {
+      params: {
+        page,
+        pageSize,
+        ...(projectName ? { projectName } : {}),
+      },
+      headers: { "User-Agent": PRD_UA },
+    });
+    const list: PrdFileRecord[] = res.data?.data?.list || [];
+    if (list.length === 0) break;
+
+    for (const item of list) {
+      if (monthsToLoad > 0 && item.create_time) {
+        const t = new Date(item.create_time.replace(" ", "T"));
+        if (!Number.isNaN(t.getTime()) && t < monthsAgo) {
+          return all;
+        }
+      }
+      all.push(item);
+    }
+
+    const total = res.data?.data?.total ?? 0;
+    if (all.length >= total || list.length < pageSize) break;
+    page += 1;
+  }
+  return all;
+}
+
+function dedupeLatestVersions(records: PrdFileRecord[]): PrdFileRecord[] {
+  const map = new Map<string, PrdFileRecord>();
+  for (const r of records) {
+    const key = `${r.project_name}/${r.path_name}`;
+    if (!map.has(key)) map.set(key, r); // 列表已按时间倒序，首次即最新
+  }
+  return [...map.values()];
+}
+
+/** 旧内网地址 → 公网 prdBaseUrl */
+function normalizePrdUrl(url: string): string {
+  if (!url) return url;
+  return url.replace(
+    /^https?:\/\/192\.168\.1\.244:7777\//,
+    config.prdBaseUrl
+  );
+}
+
+function buildNginxStyleLinks(names: string[]): string {
+  const links = names
+    .map((name) => `<a href="${name}/">${name}/</a>`)
+    .join("\n");
+  return `<html><body>${links}\n<script type="application/json" id="project-name-mapping">${JSON.stringify(
+    projectNameMap
+  )}</script></body></html>`;
+}
+
+// 爬取 {prdBaseUrl}{project}/ 下全部版本（列表接口）
 async function fetchProjectVersions(
   project: string
 ): Promise<{ html: string }> {
@@ -409,15 +564,12 @@ async function fetchProjectVersions(
       html: `没有这个项目：${project}。可用项目有：${projectList.join("、")}`,
     };
   }
-  const url = `http://192.168.1.244:7777/${project}/`;
   try {
-    const response = await axios.get(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-      },
-    });
-    return { html: htmlReduce(response.data) };
+    const records = dedupeLatestVersions(
+      await fetchPrdFileRecords({ projectName: project })
+    );
+    const versions = records.map((r) => r.path_name);
+    return { html: htmlReduce(buildNginxStyleLinks(versions)) };
   } catch (error: any) {
     return {
       html: `获取${project}项目全部版本页面失败：` + error.message,
@@ -425,26 +577,12 @@ async function fetchProjectVersions(
   }
 }
 
-// 新增：爬取 http://192.168.1.244:7777/ 首页内容
+// 爬取 PRD 首页项目列表（列表接口）
 async function fetchAllProjects(): Promise<{ html: string }> {
-  const url = "http://192.168.1.244:7777/";
   try {
-    const response = await axios.get(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-      },
-    });
-    // 处理响应内容
-    let html = htmlReduce(response.data);
-    // 添加项目映射信息到响应中
-    const projectMappingScript = `
-      <script type="application/json" id="project-name-mapping">
-        ${JSON.stringify(projectNameMap)}
-      </script>
-    `;
-    html = html.replace("</body>", `${projectMappingScript}</body>`);
-    return { html };
+    const records = await fetchPrdFileRecords({ monthsToLoad: 12 });
+    const projectNames = [...new Set(records.map((r) => r.project_name))];
+    return { html: htmlReduce(buildNginxStyleLinks(projectNames)) };
   } catch (error: any) {
     return { html: "获取首页内容失败：" + error.message };
   }
@@ -458,27 +596,27 @@ async function fetchAndSaveAllPrd(options?: {
     monthsToLoad = 1, // 默认加载最近1个月
   } = options || {};
 
-  // 1. 获取项目列表页HTML
-  const url = "http://192.168.1.244:7777/";
-  let html = "";
+  // 1. 从公网列表接口获取 PRD（已无目录浏览页）
+  let records: PrdFileRecord[] = [];
   try {
-    const res = await axios.get(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-      },
-    });
-    html = res.data;
+    records = dedupeLatestVersions(
+      await fetchPrdFileRecords({
+        // monthsToLoad=0 表示全量；否则只拉最近 N 个月
+        monthsToLoad: monthsToLoad > 0 ? monthsToLoad : 0,
+      })
+    );
   } catch (e: any) {
-    console.error("获取项目列表页失败：", e);
+    console.error("获取项目列表失败：", e);
     return;
   }
 
-  // 2. 提取所有项目文件夹名（过滤掉 ..）
-  const projectMatches = [...html.matchAll(/<a href="([^\/?#]+)\//g)];
-  let projectNames = projectMatches
-    .map((m) => m[1])
-    .filter((name) => name !== "..");
+  const byProject = new Map<string, PrdFileRecord[]>();
+  for (const r of records) {
+    const list = byProject.get(r.project_name) || [];
+    list.push(r);
+    byProject.set(r.project_name, list);
+  }
+  const projectNames = [...byProject.keys()];
 
   // 获取所有项目，不进行筛选
   console.log(`获取所有项目：${projectNames.join(", ")}`);
@@ -506,39 +644,21 @@ async function fetchAndSaveAllPrd(options?: {
     }
   }
 
-  // 5. 递归抓取每个项目下的所有版本目录（过滤掉 ..）
+  // 5. 抓取每个项目下的版本内容
   const allVersions: Record<string, any[]> = { ...existingVersions };
   for (const project of projectNames) {
     try {
-      const projectUrl = `http://192.168.1.244:7777/${project}/`;
-      const res = await axios.get(projectUrl, {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        },
-      });
-      const projectHtml = res.data;
-      const versionMatches = [
-        ...projectHtml.matchAll(/<a href="([^\/?#]+)\//g),
-      ];
-      let versionNames = versionMatches
-        .map((m) => m[1])
-        .filter((v) => v !== "..");
-
-      // 提取版本时间信息 - 使用更简单的匹配
-      const versionTimeMap = new Map();
-      const versionTimeMatches = [
-        ...projectHtml.matchAll(
-          /<a href="([^\/?#]+)\/">[^<]+<\/a>\s*(\d{1,2}-[A-Za-z]{3}-\d{4}\s+\d{1,2}:\d{2})/g
-        ),
-      ];
-      versionTimeMatches.forEach((match) => {
-        const versionName = match[1];
-        const timeStr = match[2];
-        if (versionName !== "..") {
-          versionTimeMap.set(versionName, timeStr);
-        }
-      });
+      const projectRecords = byProject.get(project) || [];
+      const versionNames = projectRecords.map((r) => r.path_name);
+      const versionTimeMap = new Map(
+        projectRecords.map((r) => [r.path_name, r.create_time])
+      );
+      const versionUrlMap = new Map(
+        projectRecords.map((r) => [
+          r.path_name,
+          r.prd_link.endsWith("/") ? r.prd_link : `${r.prd_link}/`,
+        ])
+      );
 
       // 获取所有版本，不进行筛选
       console.log(`项目 ${project}: 获取所有版本：${versionNames.join(", ")}`);
@@ -555,7 +675,9 @@ async function fetchAndSaveAllPrd(options?: {
         const batch = versionNames.slice(i, i + concurrencyLimit);
         const batchResults = await Promise.allSettled(
           batch.map(async (version) => {
-            const versionUrl = `http://192.168.1.244:7777/${project}/${version}/`;
+            const versionUrl =
+              versionUrlMap.get(version) ||
+              `${config.prdBaseUrl}${project}/${version}/`;
             let versionContent = "";
 
             // 检查是否需要获取内容（根据时间筛选条件）
@@ -622,6 +744,11 @@ async function fetchAndSaveAllPrd(options?: {
                           return {
                             ...node,
                             fullUrl: htmlUrl,
+                            ...(node.children
+                              ? {
+                                  children: await fetchAllPages(node.children),
+                                }
+                              : {}),
                           };
                         } else {
                           return node;
@@ -641,7 +768,8 @@ async function fetchAndSaveAllPrd(options?: {
                           name: node.pageName || node.name || "未命名页面",
                           url: node.fullUrl,
                         });
-                      } else if (node.type === "Folder" && node.children) {
+                      }
+                      if (node.children) {
                         pages.push(...extractWireframePages(node.children));
                       }
                     }
@@ -676,8 +804,8 @@ async function fetchAndSaveAllPrd(options?: {
                   const page = await browserManager.createPage();
                   try {
                     await page.goto(versionUrl, {
-                      waitUntil: "networkidle0",
-                      timeout: 15000,
+                      waitUntil: "networkidle2",
+                      timeout: 30000,
                     });
 
                     await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -836,7 +964,7 @@ async function fetchAndSaveAllPrd(options?: {
 
             return {
               name: version,
-              url: versionUrl,
+              url: normalizePrdUrl(versionUrl),
               content: versionContent || version,
               lastModified: versionTimeMap.get(version) || null,
               pages:
@@ -865,9 +993,9 @@ async function fetchAndSaveAllPrd(options?: {
             );
             return {
               name: versionNames[i + index],
-              url: `http://192.168.1.244:7777/${project}/${
-                versionNames[i + index]
-              }/`,
+              url:
+                versionUrlMap.get(versionNames[i + index]) ||
+                `${config.prdBaseUrl}${project}/${versionNames[i + index]}/`,
               content: `处理失败: ${result.reason?.message || "未知错误"}`,
               lastModified: versionTimeMap.get(versionNames[i + index]) || null,
               pages: [],
@@ -944,7 +1072,23 @@ async function cleanupBrowser(): Promise<void> {
 
 // 时间解析函数
 function parseTimeString(timeStr: string): Date {
-  // 解析格式如 "19-Apr-2022 16:14"
+  // 公网列表接口格式: "2026-07-14 16:58:24"
+  const apiMatch = timeStr.match(
+    /^(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/
+  );
+  if (apiMatch) {
+    const [, year, month, day, hour, minute, second] = apiMatch;
+    return new Date(
+      parseInt(year),
+      parseInt(month) - 1,
+      parseInt(day),
+      parseInt(hour),
+      parseInt(minute),
+      parseInt(second || "0")
+    );
+  }
+
+  // 旧目录页格式如 "19-Apr-2022 16:14"
   const months: { [key: string]: number } = {
     Jan: 0,
     Feb: 1,
@@ -1060,7 +1204,7 @@ class DocumentIndexManager {
             const index: DocumentIndex = {
               project,
               version: version.name,
-              url: version.url,
+              url: normalizePrdUrl(version.url),
               title,
               keywords,
               summary,

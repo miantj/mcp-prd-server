@@ -45,6 +45,58 @@ export function isValidVersion(project: string, version: string): boolean {
 }
 
 /**
+ * 将 Axure 分享链接解析为真实线框页 URL。
+ * 支持：
+ * - 新版查询串：?id=xxx&p=页面名&g=1
+ * - 旧版 hash：#id=xxx&p=页面名&g=1
+ * - 已是 *.html 线框页：原样返回
+ * 否则返回去掉 search/hash 后的目录地址（播放器壳页）。
+ */
+export function resolveAxurePageUrl(url: string): string {
+  try {
+    const urlObj = new URL(url);
+    let pageName = urlObj.searchParams.get("p") || "";
+
+    if (!pageName && urlObj.hash) {
+      const hash = urlObj.hash.replace(/^#/, "");
+      // hash 可能是 "id=...&p=...&g=1" 或纯页面名
+      if (hash.includes("=")) {
+        pageName = new URLSearchParams(hash).get("p") || "";
+      } else if (hash) {
+        pageName = hash;
+      }
+    }
+
+    // 已是线框 html，且无 p 参数指向其它页
+    if (!pageName && /\.html?$/i.test(urlObj.pathname)) {
+      return urlObj.href;
+    }
+
+    urlObj.search = "";
+    urlObj.hash = "";
+    let pathname = urlObj.pathname || "/";
+    if (/\.html?$/i.test(pathname)) {
+      pathname = pathname.replace(/[^/]+$/, "");
+    }
+    if (!pathname.endsWith("/")) {
+      pathname += "/";
+    }
+    urlObj.pathname = pathname;
+    const baseUrl = urlObj.href;
+
+    if (!pageName) {
+      return baseUrl;
+    }
+
+    const decoded = decodeURIComponent(pageName.trim());
+    const fileName = /\.html?$/i.test(decoded) ? decoded : `${decoded}.html`;
+    return new URL(fileName, baseUrl).href;
+  } catch {
+    return url;
+  }
+}
+
+/**
  * 增强HTML内容的语义化
  * @param {string} htmlStr - 原始HTML字符串
  * @returns {string} 处理后的HTML字符串

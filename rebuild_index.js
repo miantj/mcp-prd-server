@@ -5,7 +5,7 @@ import { fetchHtmlWithContentImpl, fetchPrd } from "./build/handlers.js";
 async function rebuildIndex() {
   console.log("=== 开始测试 ===\n");
   const url =
-    "https://prd-upload-pub.yishouapp.com/prd/ERP/cd6838/#id=cnbgqz&p=erp%E5%BC%82%E5%B8%B8%E5%B7%A5%E5%8D%95%EF%BC%88%E6%97%A0%E6%95%B0%E6%8D%AE%EF%BC%89&g=1";
+    "https://prd-upload-pub.yishouapp.com/prd/yishou/7.47.0/latest/#id=v7rb94&p=%E5%AE%A2%E6%9C%8D%E5%88%86%E6%B5%81%E5%BC%B9%E7%AA%97%E6%94%AF%E6%8C%81%E7%94%B5%E8%AF%9D%E6%8B%A8%E6%89%93-%E5%8C%97%E6%B5%B7&g=1";
   try {
     const result = await fetchPrd(url);
 

@@ -15,9 +15,14 @@ export const projectNameMap = {
 
 // 配置项
 export const config = {
-  saveScreenshot: false, // 是否保存截图
-  screenshotDir: "screenshots", // 截图保存目录
-  url: "https://prd-upload-pub.yishouapp.com/prd/yishou/7.59.0/#id=g8yvfk&p=%E8%A1%A5%E5%81%BF%E9%85%8D%E7%BD%AE&g=1", // 截图保存目录
+  // 大结果会被 Cursor 落到 agent-tools/*.txt（纯文本会丢 image 块），所以默认落盘并回传路径
+  saveScreenshot: true,
+  screenshotDir: "screenshots", // 相对项目根；返回时会转成绝对路径
+  // 旧地址 http://192.168.1.244:7777/ 已下线，统一走公网 PRD
+  prdBaseUrl: "https://prd-upload-pub.yishouapp.com/prd/",
+  prdListApi: "https://prd-upload-pub.yishouapp.com/file/getList",
+  prdHost: "prd-upload-pub.yishouapp.com",
+  url: "https://prd-upload-pub.yishouapp.com/prd/yishou/7.59.0/#id=g8yvfk&p=%E8%A1%A5%E5%81%BF%E9%85%8D%E7%BD%AE&g=1",
   monthsToLoad: 1, // 加载最近几个月的文档，默认1个月
 };
 
@@ -42,9 +47,11 @@ if (!fs.existsSync(dataDir)) {
   }
 }
 
-// 确保截图目录存在
+// 确保截图目录存在（与 handlers 落盘路径一致：相对项目根 serverRootDir）
 if (config.saveScreenshot) {
-  const screenshotDir = path.resolve(process.cwd(), config.screenshotDir);
+  const screenshotDir = path.isAbsolute(config.screenshotDir)
+    ? config.screenshotDir
+    : path.join(serverRootDir, config.screenshotDir);
   if (!fs.existsSync(screenshotDir)) {
     try {
       fs.mkdirSync(screenshotDir, { recursive: true });

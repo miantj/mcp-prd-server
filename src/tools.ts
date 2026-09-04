@@ -4,8 +4,8 @@ import { z } from "zod";
 import {
   fetchPrd,
   fetchHtmlWithContentImpl,
-  fetchProjectVersions,
-  searchDocuments,
+  // fetchProjectVersions,
+  // searchDocuments,
   fetchAndSaveAllPrd,
 } from "./handlers.js";
 import { projectNameMap, rules } from "./config.js";
@@ -48,6 +48,8 @@ function registerTools(server: any) {
           };
         } else {
           const result = await fetchPrd(url);
+          // 不回传 base64 image：内容过大时 Cursor 只落 txt，图片会丢；
+          // 改落盘并在文本中给绝对路径，Agent 用 Read 读图即可。
           return {
             content: [
               {
@@ -55,32 +57,24 @@ function registerTools(server: any) {
                 text: rules.beforeCode,
                 mimeType: "text/plain",
               },
-              ...(result.screenshot
-                ? [
-                    {
-                      type: "text",
-                      text: result.html,
-                      mimeType: "text/html",
-                    },
-                    {
-                      type: "image",
-                      data: result.screenshot.replace(
-                        /^data:image\/png;base64,/,
-                        ""
-                      ),
-                      mimeType: "image/png",
-                    },
-                  ]
-                : [
-                    {
-                      type: "text",
-                      text: result.html,
-                      mimeType: "text/html",
-                    },
-                  ]),
               {
                 type: "text",
-                text: JSON.stringify({ projectNameMap }),
+                text: result.html,
+                mimeType: "text/html",
+              },
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    projectNameMap,
+                    screenshotPath: result.screenshotPath || null,
+                    tip: result.screenshotPath
+                      ? "截图已保存到本机，请用 Read 工具读取 screenshotPath 查看图片（agent-tools 的 txt 不含图片）"
+                      : "本次无截图",
+                  },
+                  null,
+                  2
+                ),
                 mimeType: "application/json",
               },
             ],
@@ -136,47 +130,47 @@ function registerTools(server: any) {
   );
 
   // // 搜索项目文档
-  server.tool(
-    "search_documents",
-    "搜索文档内容，支持智能匹配和关键词搜索",
-    {
-      query: z.string().describe("搜索关键词，如 yishou"),
-    },
-    async ({ query }: { query: string }) => {
-      const result = await searchDocuments(query);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                query,
-                results: result.map((result) => ({
-                  title: result.title,
-                  project: result.project,
-                  version: result.version,
-                  url: result.url,
-                  summary: result.summary,
-                  relevance: result.relevance,
-                  matchType: result.matchType,
-                  matchedKeywords: result.matchedKeywords,
-                  pages: result.pages,
-                })),
-              },
-              null,
-              2
-            ),
-            mimeType: "application/json",
-          },
-          {
-            type: "text",
-            text: JSON.stringify({ projectNameMap }, null, 2),
-            mimeType: "application/json",
-          },
-        ],
-      };
-    }
-  );
+  // server.tool(
+  //   "search_documents",
+  //   "搜索文档内容，支持智能匹配和关键词搜索",
+  //   {
+  //     query: z.string().describe("搜索关键词，如 yishou"),
+  //   },
+  //   async ({ query }: { query: string }) => {
+  //     const result = await searchDocuments(query);
+  //     return {
+  //       content: [
+  //         {
+  //           type: "text",
+  //           text: JSON.stringify(
+  //             {
+  //               query,
+  //               results: result.map((result) => ({
+  //                 title: result.title,
+  //                 project: result.project,
+  //                 version: result.version,
+  //                 url: result.url,
+  //                 summary: result.summary,
+  //                 relevance: result.relevance,
+  //                 matchType: result.matchType,
+  //                 matchedKeywords: result.matchedKeywords,
+  //                 pages: result.pages,
+  //               })),
+  //             },
+  //             null,
+  //             2
+  //           ),
+  //           mimeType: "application/json",
+  //         },
+  //         {
+  //           type: "text",
+  //           text: JSON.stringify({ projectNameMap }, null, 2),
+  //           mimeType: "application/json",
+  //         },
+  //       ],
+  //     };
+  //   }
+  // );
 }
 
 export { registerTools };
